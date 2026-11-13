@@ -26,7 +26,7 @@ flowchart TB
         Gateway["Unified bot gateway and channel adapters"]
         WebAPI["Authenticated application API and stream endpoint"]
         Conversation["Conversation service and repository"]
-        Attachments["Attachment receipt and authorized retrieval"]
+        Attachments["Environment-gated attachment receipt and authorized retrieval"]
         Runtime["Vercel EVE runtime integration"]
         Scheduler["Durable scheduler"]
         Tasks["Asynchronous task/work lifecycle"]
@@ -125,7 +125,7 @@ The shared package should expose these modules/interfaces:
 | **Unified bot gateway** | Provide the common ingress/egress path for configured bot channels: authenticate and normalize events, route them to the correct product agent and dispatch authorized outbound messages. |
 | **Vercel EVE runtime integration** | Run each product deployment on the same EVE runtime baseline, including agent lifecycle, sessions, tool calling, workflows, delegation and agent events. |
 | **Outbound message dispatcher** | Send agent- or application-originated messages without an active inbound turn; persist delivery intent and retry safely. |
-| **Attachment receipt and retrieval** | Receive attachments delivered by supported clients/channels, persist their metadata/content references and provide authorized access to the agent. Processing depends on the agent's actual capabilities. |
+| **Attachment receipt and retrieval** | When enabled by the deployment environment, receive attachments delivered by supported clients/channels, persist their metadata/content references and provide authorized access to the agent. When disabled, stop attachment bytes before backend ingestion, storage or agent processing. |
 | **Scheduler service and repository** | Persist one-time, recurring, interval and event/condition schedules; calculate due times and create durable executions using each product's database. |
 | **Task/work service and repository** | Provide shared asynchronous task/run identities, lifecycle, dependencies, cancellation, checkpoints, leases, retries and recovery. Product handlers implement the work itself. |
 | **Linked interaction service and repository** | Correlate related conversations, questions, deferred work and replies through scoped, authorized interaction records without merging full transcripts. |
@@ -144,7 +144,7 @@ Each product supplies the following through explicit interfaces:
 - Its own database connection and product-specific tenant/owner scope.
 - Its product-specific agent definition, instructions, capabilities and communication policy.
 - Its domain-specific tools/capabilities and tool authorization.
-- Its attachment-processing capabilities; the common layer delivers supported attachments to the agent but does not prescribe product upload settings.
+- Its attachment-processing capabilities. The common environment setting controls whether attachment content enters the backend at all; when enabled, the common layer delivers supported attachments to the agent subject to authorization and product capabilities.
 - Product-owned handlers for scheduled work, asynchronous tasks and linked interactions, plus product-specific events and reasons for proactive messages.
 
 These extensions are in-process modules/providers registered with the host application. This is not a plugin marketplace or a mandatory plugin microservice. A product capability must not gain unrestricted database or platform access merely because it is registered as an agent tool.
@@ -269,10 +269,10 @@ All clients and messaging integrations normalize inbound content into the shared
 - Original platform, channel connection and external message identifiers.
 - Text and supported rich-message parts.
 - Reply/thread/reference information.
-- Attachments and their metadata when delivered by the connected client or platform.
+- Attachment metadata and references only when attachment ingestion is enabled for that deployment.
 - Original event time and relevant platform interaction metadata.
 
-The application authenticates the event, resolves the product/account scope, checks access, deduplicates it, persists the canonical inbound message and any attachment references, and then dispatches the turn to the shared Vercel EVE runtime. Attachments delivered by a channel or client must be made available to the agent through authorized references; the agent handles them only to the extent supported by its tools and capabilities. Do not trust a model-supplied tenant, customer, owner or conversation identifier.
+The application authenticates the event, resolves the product/account scope, checks access and deduplicates it before dispatching the turn to the shared Vercel EVE runtime. Before any attachment bytes are fetched from a messaging platform, uploaded by a web client, proxied to the application, persisted or exposed to the agent, the ingress path must enforce the deployment environment variable `CHATBOT_ATTACHMENTS_ENABLED` (`true` or `false`). Each deployment must set this value explicitly. When `false`, do not fetch or download attachment content, accept or proxy web-upload bytes, store attachment content or durable attachment references, or include attachments in the EVE/agent turn; ignore the attachment and continue processing any accompanying text. The client should disable its upload control when possible, but the backend must enforce the setting even if a client or platform still sends attachment metadata or an upload request. A lightweight indication that an attachment was ignored may be shown to the sender, but the attachment itself must not be transferred into backend storage or AI processing. This prevents unnecessary backend storage and attachment-related AI/token usage. When `true`, the normal authorized attachment receipt, storage, retrieval and agent-capability rules apply. Do not trust a model-supplied tenant, customer, owner or conversation identifier.
 
 ### 3.2 Agent and application messages
 
@@ -335,7 +335,7 @@ Voice interaction uses the same canonical conversation and message APIs. Text in
 The common client provides reusable presentation and action contracts for:
 - Task/status/progress events supplied by the host product.
 - Focused requests for additional user input and confirmations, rendered as actionable messages/cards using a generic interaction contract.
-- Display of attachments and authorized references delivered by the connected client or messaging platform; expose them to the agent through the common attachment-retrieval contract.
+- Display of attachments and authorized references only when attachment ingestion is enabled by the deployment environment; expose them to the agent through the common attachment-retrieval contract. When disabled, disable web upload controls and rely on mandatory backend enforcement so attachment bytes are not uploaded or processed.
 - Artifact/file references and click-time download resolution supplied by the host product.
 - External access links that open in a separate browser tab/window when the host product supplies them.
 
@@ -445,7 +445,7 @@ References: [Chat SDK repository and feature overview](https://github.com/vercel
 
 ### 7.2 Persistence ownership
 
-Conversation records, messages, message/attachment references, channel identity mappings, and outbound delivery records are persisted through the host product's PostgreSQL database and storage interfaces, using Drizzle ORM.
+Conversation records, messages, enabled attachment metadata/references, channel identity mappings, and outbound delivery records are persisted through the host product's PostgreSQL database and storage interfaces, using Drizzle ORM. When `CHATBOT_ATTACHMENTS_ENABLED=false`, no attachment content or durable attachment reference is persisted.
 
 The library may provide Drizzle schema definitions, migrations, repository implementations and indexes for these shared chat records. Each product applies and operates them in its own database. Do not run a separate shared chatbot database or allow Chat SDK's short-lived state/cache to be the only copy of a message.
 
@@ -453,7 +453,9 @@ Product business data remains owned by the product application. The EVE runtime'
 
 ### 7.3 Environment configuration and secrets
 
-All application and supporting workloads receive environment-specific configuration through Kubernetes resources; do not bake deployment-specific values into container images or source code.
+All application-level and runtime configuration is supplied through environment variables only. This includes channel and integration settings, model/provider settings, feature flags, runtime options, limits, voice settings and attachment-ingestion controls. Do not use database rows, conversational commands or a separate settings UI as an alternative source for application/runtime configuration. Each deployment must receive its configured values through its environment; do not bake deployment-specific values into container images or source code. This rule does not turn bot-account identity mappings, conversation history/context or product business records into environment variables: those are durable application data and remain in the product database.
+
+Application workloads receive environment variables through Kubernetes resources: use ConfigMaps for non-sensitive values and Secrets for sensitive values. The attachment-ingestion switch is `CHATBOT_ATTACHMENTS_ENABLED`; each deployment explicitly sets it to `true` or `false`.
 
 - Use **ConfigMaps** for non-sensitive settings such as log level, feature flags, public service endpoints, allowed origins and non-secret runtime options. Consume individual keys through `env[].valueFrom.configMapKeyRef`, or a controlled set through `envFrom.configMapRef`.
 - Use **Kubernetes Secrets** for credentials and sensitive values such as database passwords, signing keys, OAuth/client secrets, channel tokens, webhook secrets and provider API keys. Reference only the required keys through `secretKeyRef` or a narrowly scoped `envFrom.secretRef`; mount files instead when a library expects certificate/key files or when file-based rotation is preferable.
@@ -538,9 +540,10 @@ The shared implementation is complete only when these checks pass independently 
 - Accepted asynchronous tasks survive client disconnect and process restart; cancellation is recorded and stale workers are fenced from committing.
 - Replayed or duplicate source events resume from a durable cursor and do not repeat an accepted business effect.
 - A linked interaction routes an authorized provider/owner response to the originating conversation without merging private transcripts or requiring the customer to repeat the question.
-- A file attached through a supported web or messaging client is received, linked to the correct canonical message/conversation and made available to the authorized agent; unsupported file processing is not assumed.
+- With `CHATBOT_ATTACHMENTS_ENABLED=true`, a file attached through a supported web or messaging client is received, linked to the correct canonical message/conversation and made available to the authorized agent; unsupported file processing is not assumed.
+- With `CHATBOT_ATTACHMENTS_ENABLED=false`, attachment bytes are not fetched, uploaded, proxied, stored or passed to the agent; the text portion of the message still works, and attachment-related storage and AI processing are avoided.
 - A transient delivery failure or duplicate event does not lose a message or repeat its associated business action.
 - `search_conversation_history` finds an exact older message from before context compaction and returns its source reference and timestamp.
 - The history tool cannot retrieve messages from an unrelated conversation or product scope.
-- A restart does not erase canonical messages, attachment metadata or pending outbound delivery.
+- A restart does not erase canonical messages, enabled attachment metadata/references or pending outbound delivery.
 - A platform-specific unsupported capability is rejected or reported explicitly, not silently treated as successful.
