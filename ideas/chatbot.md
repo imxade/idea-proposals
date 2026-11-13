@@ -23,9 +23,7 @@ flowchart TB
   subgraph Cluster["Operator-provisioned Kubernetes cluster"]
     subgraph ProductHost["Product namespace — isolated application instance"]
       subgraph Common["Reusable TypeScript chatbot library embedded in product application"]
-        Gateway["Unified bot gateway<br/>Vercel Chat SDK Chat instance"]
-        WebAdapter["Chat SDK Web adapter<br/>Authenticated HTTP / SSE"]
-        WebAdapter --> Gateway
+        Gateway["Unified bot gateway<br/>Vercel Chat SDK Chat instance<br/>Web and platform adapters"]
         Conversation["Conversation service and repository"]
         Attachments["Environment-gated attachment receipt and authorized retrieval"]
         Runtime["Vercel EVE runtime integration"]
@@ -87,10 +85,10 @@ flowchart TB
 
   Crossplane -. "Provisions supported infrastructure" .-> Cluster
   Flux -. "Reconciles operators, services and applications" .-> Cluster
-  Web <-->|"Authenticated Web adapter / SSE"| WebAdapter
-  Discord <-->|"Platform events / outbound messages"| Gateway
-  WhatsApp <-->|"Platform events / outbound messages"| Gateway
-  Other <-->|"Platform events / outbound messages"| Gateway
+  Web <-->|"Chat SDK Web adapter / authenticated HTTP + SSE"| Gateway
+  Discord <-->|"Chat SDK platform adapter / platform events"| Gateway
+  WhatsApp <-->|"Chat SDK platform adapter / platform events"| Gateway
+  Other <-->|"Chat SDK platform adapters / platform events"| Gateway
   Outbound --> Gateway
 ~~~
 
@@ -155,7 +153,7 @@ All product deployments use the same **Vercel EVE runtime baseline**, integrated
 
 EVE session state is execution context, not the canonical record of conversations or product business state. Persist messages, task/business records, schedules, checkpoints and delivery intents through the product's authoritative data services. Product-specific specialist agents, worker definitions, selection, delegation policy and result evaluation remain part of the product agent; the common chatbot provides EVE's generic runtime primitives but does not define a shared specialist registry or product-neutral subagent orchestration. All product deployments use the same EVE integration and version baseline, not one shared cross-product agent instance. Each product has its own deployment, agent instances, runtime sessions, identities and data; capability-specific tools and workloads remain product-owned.
 
-The **unified bot gateway** is also common. It is a shared library module and service interface, not a separately operated cross-product bot service. It is the single ingress/egress path for browser chat and supported messaging platforms. Use one Vercel Chat SDK `Chat` instance with the relevant adapters, including `@chat-adapter/web`, and bridge accepted turns into the shared EVE runtime through EVE's Chat SDK channel integration:
+The **unified bot gateway** is also common. It is a shared library module and service interface, not a separately operated cross-product bot service. It is the single ingress/egress path for browser chat and supported messaging platforms. Use one Vercel Chat SDK `Chat` instance with `@chat-adapter/web` for browser chat and the appropriate Chat SDK platform adapters for supported messaging channels, then bridge accepted turns into the shared EVE runtime through EVE's Chat SDK channel integration:
 - Receives browser requests through the authenticated Chat SDK Web adapter and platform events through the configured messaging adapters; each adapter performs its applicable request authentication, webhook verification and event parsing.
 - Resolves the product deployment, bot account, authenticated participant, channel connection and canonical conversation scope. The Web adapter's `getUser` callback must resolve the caller from the host product's verified server-side session; never trust a browser-supplied user or tenant identity.
 - Normalizes messages, attachments, replies, threads and platform metadata into the common message contract.
