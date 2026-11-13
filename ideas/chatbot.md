@@ -34,6 +34,10 @@ flowchart TB
         Interactions["Linked interaction / mediation service"]
         Outbound["Outbound dispatcher and durable outbox"]
         Tools["Common agent tools"]
+        Accounts["Bot account and human-role registry"]
+        Accounts --> Gateway
+        Accounts --> Conversation
+        Accounts <--> Interactions
         Gateway --> Conversation
         WebAPI --> Conversation
         Conversation <--> Attachments
@@ -58,6 +62,7 @@ flowchart TB
       Blob[("Product-scoped attachment storage interface / durable backend")]
 
       Policy --> Gateway
+      Policy --> Accounts
       Policy --> Conversation
       Policy --> Attachments
       Agent <--> Runtime
@@ -103,7 +108,7 @@ This is preferable to a separate service because:
 - Each product deployment needs substantially the same message normalization, identity mapping, conversation storage, context retrieval and outbound delivery.
 - A network service would introduce another deployment, API boundary, availability dependency and potential competing owner of conversation history.
 - Each product already has its own application database and different security and domain rules. The shared library can use the host application's database without combining product data.
-- A library lets the two products evolve independently while reusing the same tested conversation contracts and adapters.
+- A library lets consuming products evolve independently while reusing the same tested conversation contracts and adapters.
 
 The `chatbot/` directory in this repository contains the three specifications. It is not itself the implementation package. The eventual package can be versioned and consumed by both application codebases.
 
@@ -114,6 +119,7 @@ The shared package should expose these modules/interfaces:
 | Module or interface | Shared responsibility |
 |---|---|
 | **Channel adapters** | Receive platform/web events, verify and normalize them, preserve platform references, and deliver outbound messages. |
+| **Bot account and human-role registry** | Maintain each bot account's stable application identity, connect its platform installations, associate human platform identities with product-defined roles, and manage those associations from the bot account's control conversation. |
 | **Conversation service and repository** | Create and resolve canonical conversations, associate messages and participants, persist messages, maintain isolated context and provide indexed history retrieval/search. |
 | **Shared web application** | Own and provide the standalone reusable Next.js browser chat application, including conversation history, transcript/composer, streaming, voice, file attachments, progress/events and authenticated API integration. |
 | **Unified bot gateway** | Provide the common ingress/egress path for configured bot channels: authenticate and normalize events, route them to the correct product agent and dispatch authorized outbound messages. |
@@ -134,6 +140,7 @@ The common platform standardizes on Vercel EVE for agent execution. The conversa
 Each product supplies the following through explicit interfaces:
 
 - Its authenticated principal and authorization/policy resolver.
+- Its human-role definitions, role-specific permissions and human-context scope. The common layer manages account-scoped identity associations; the product defines what each role can do.
 - Its own database connection and product-specific tenant/owner scope.
 - Its product-specific agent definition, instructions, capabilities and communication policy.
 - Its domain-specific tools/capabilities and tool authorization.
@@ -150,13 +157,13 @@ EVE session state is execution context, not the canonical record of conversation
 
 The **unified bot gateway** is also common. It is a shared library module and service interface, not a separately operated cross-product bot service. It is the single ingress/egress path for supported messaging platforms and:
 - Receives platform events through configured channel adapters and verifies authenticity.
-- Resolves the product deployment, bot connection, participant and canonical conversation scope.
+- Resolves the product deployment, bot account, bot connection, participant and canonical conversation scope.
 - Normalizes messages, attachments, replies, threads and platform metadata.
 - Routes accepted user turns to that product's shared EVE runtime integration.
 - Returns agent/application messages and asynchronous events through the correct platform adapter.
 - Supports durable, idempotent proactive outbound delivery through the shared outbox.
 
-The gateway implementation and contracts are common, but **bot identities, credentials, channel installations, configuration, conversation data and authorization remain isolated per product and deployment**. Separate product deployments do not share bot accounts or conversation stores. The gateway must enforce each product's own policy and platform capability limits.
+The gateway implementation and contracts are common, but **bot identities, credentials, channel installations, configuration, conversation data and authorization remain isolated per product and deployment**. Each bot account has a stable internal account ID and its own context, conversations, data and configured channel connections. Separate product deployments do not share bot accounts or conversation stores. The gateway must enforce each product's own policy and platform capability limits.
 
 ## 2. Logical agents, platform identities and conversations
 
@@ -176,11 +183,32 @@ One configured platform identity can serve multiple direct messages, groups, cha
 
 The identity must be installed, invited, joined or connected through the platform's own mechanism. A username mention alone does not grant membership, room access or permission to read messages.
 
-### 2.2 Canonical conversation mapping
+### 2.2 Bot account onboarding and human identity management
+
+Each service has a **bot account** with a stable internal account ID. This account is the durable owner of the bot's configuration, conversation history, context, linked interactions, tasks and other service data. It is distinct from the bot's Discord/Telegram/WhatsApp/Matrix identity and from any human's platform user ID. A bot account can have multiple channel connections, each mapped to its own platform identity and installation context.
+
+The onboarding flow is:
+
+1. Create or provision the bot account for the service.
+2. Install, invite or connect the bot through the chosen platform's normal mechanism and associate that channel connection with the bot account.
+3. Open the bot account's own management conversation and use ordinary language to configure it. Commands may be supplied as shortcuts, but are not required for ordinary onboarding.
+4. A person who will manage or provide context to the bot connects their platform identity and is assigned the relevant product-defined role from within that bot account's management conversation. The common flow does not require a separate registration website, pasted token, additional identity-verification step or external account-linking ceremony.
+
+The bot account's management conversation is the control surface for adding, changing and disconnecting linked human platform identities. A platform identity cannot be attached to or switched for the bot account through an unrelated customer conversation or an unrelated bot account.
+
+When a linked person changes their platform user ID, they use the bot account's management conversation to disconnect the previous ID and connect the replacement. The application updates the human-to-platform identity mapping only. It does not create a new bot account, change the bot account ID, reset or migrate the bot's context, or alter its conversation history, tasks, linked interactions, configuration or other account data. The existing bot account continues as before under the replacement platform identity.
+
+Changing the bot's own platform identity or replacing one of its channel connections is also done from the same bot-account management conversation. It updates only the affected platform-connection mapping; the internal bot account and all of its context and data remain unchanged.
+
+The common layer also supports human-provided context and human handoff. A linked person can contact the bot through their associated platform identity from within the bot account and provide new information or context; the application associates that contribution with the bot account and its source. When a product-defined human role is linked and a request needs that person's knowledge or decision, the common linked-interaction service can route the unresolved question to that person and return their response to the originating conversation.
+
+If no provider or other relevant human role is linked, the agent continues using only the information and capabilities available to it. It does not ask a nonexistent provider, create a handoff with no recipient or invent missing information. When it cannot determine an answer, it says so clearly and continues with any parts it can answer.
+
+### 2.3 Canonical conversation mapping
 
 The application creates a stable internal conversation ID and maps it to the external platform context. The mapping must preserve enough information to route messages back to the right place:
 
-- Product/deployment and authorized account/tenant scope.
+- Product/deployment, bot account ID and any product-specific tenant/owner scope.
 - Channel type and channel-connection identity.
 - External platform account, room, group, channel or DM identifier.
 - External thread/topic identifier where applicable.
@@ -195,9 +223,9 @@ A runtime session ID is an execution identifier mapped to the canonical conversa
 
 A previous conversation is not silently added to the current one. Cross-conversation retrieval requires an explicit reference and an independent authorization check.
 
-### 2.3 Direct, group and channel interaction
+### 2.4 Direct, group and channel interaction
 
-Ordinary natural language is the normal interaction method. Slash commands may be supplied as optional shortcuts, but users must not need a command to make an ordinary request.
+Ordinary natural language is the normal interaction method. Slash commands may be supplied as shortcuts, but users must not need a command to make an ordinary request.
 
 - **Direct messages:** messages are addressed to the agent by virtue of being sent to its identity. A mention or command is not required.
 - **Addressed group mode:** mentions, replies to the agent, or other platform-native addressing mechanisms invoke the agent. Unrelated group messages are not treated as requests.
@@ -206,12 +234,12 @@ Ordinary natural language is the normal interaction method. Slash commands may b
 
 The integration must support both addressed mode and full-participation mode where the platform allows them. The product/channel configuration determines which mode is active; the shared library must not impose a universal DM-only, mention-only, public-only or private-only restriction.
 
-**Initial messaging targets are Discord, WhatsApp Business and Telegram.** The shared platform supports these three adapters in its initial integration baseline as the initial integration baseline; each product enables only its configured subset. Additional adapters can follow the same common contract without becoming initial launch dependencies.
+**Initial messaging targets are Discord, WhatsApp Business and Telegram.** The shared platform supports these three adapters in its initial integration baseline; each product configures the subset it uses. Additional adapters can follow the same common contract.
 
 Actual access and visibility remain controlled by platform installation, membership, privacy settings, permissions, intents, user consent and policies. The library must not promise that every platform can expose all messages in all spaces. A platform adapter must report its real capabilities rather than silently pretending that an unsupported mode works.
 
 
-### 2.4 Platform-specific capability constraints
+### 2.5 Platform-specific capability constraints
 
 The interaction model is shared, but actual access and delivery differ by platform. The library and product configuration must record the effective capabilities of each adapter and connection rather than promising identical behaviour everywhere.
 
@@ -296,7 +324,7 @@ The common client provides:
 
 The common web client supports speech-to-text (STT) and text-to-speech (TTS). When voice input is enabled, the user explicitly starts microphone capture; the client continuously listens while active and detects a configurable silence/pause interval before finalizing the utterance and submitting it for a response. The deploying operator configures this interval, with a sensible default. Show a clear listening state and provide an immediate stop/mute control. Handle microphone permission denial, unsupported browsers and recognition errors. TTS provides visible playback state, pause/stop controls and interruption when the user starts a new interaction or selects another response.
 
-Voice is an optional interaction mode over the same canonical conversation and message APIs. Text interaction remains available if voice permissions, browser APIs or a speech provider are unavailable. Make the speech-processing method and provider/processing location visible to the user. Raw microphone audio is not retained as canonical conversation data and must not be retained by default; persist the resulting text message, and retain audio only when the user explicitly attaches or requests its retention under the host product's policy. Keep provider credentials and speech-service secrets on the server; do not expose them in browser code. The host product configures the speech provider, allowed languages, voice, retention policy and disclosure.
+Voice interaction uses the same canonical conversation and message APIs. Text interaction remains available if voice permissions, browser APIs or a speech provider are unavailable. Make the speech-processing method and provider/processing location visible to the user. Raw microphone audio is not retained as canonical conversation data and must not be retained by default; persist the resulting text message, and retain audio only when the user explicitly attaches or requests its retention under the host product's policy. Keep provider credentials and speech-service secrets on the server; do not expose them in browser code. The host product configures the speech provider, allowed languages, voice, retention policy and disclosure.
 
 ### 4.4 Shared client actions and product extension points
 
@@ -419,7 +447,7 @@ The library may provide Drizzle schema definitions, migrations, repository imple
 
 Product business data remains owned by the product application. The EVE runtime's session state is execution context, not proof that a message or business action was persisted successfully. In local development and CI, run CloudNativePG-managed PostgreSQL inside K3s, using a persistent volume. The PVC and the local cluster's backing data volume must be retained across Pod restarts and normal application redeployments; deleting the cluster or losing the host can still destroy local data. CI environments may intentionally be ephemeral. Production deployments use the same CloudNativePG model with environment-appropriate persistent storage, independent backups and tested recovery. Do not use SQLite or a separate PostgreSQL emulator for accepted durable application state.
 
-### 7.3.1 Environment configuration and secrets
+### 7.3 Environment configuration and secrets
 
 All application and supporting workloads receive environment-specific configuration through Kubernetes resources; do not bake deployment-specific values into container images or source code.
 
@@ -431,9 +459,9 @@ All application and supporting workloads receive environment-specific configurat
 - Prefer Kubernetes Service DNS names for in-cluster dependencies. `localhost` inside an application Pod refers to that same Pod, not PostgreSQL or another service. Use the CloudNativePG read/write Service name for database connections; use port-forwarding only for deliberate host-side development access.
 - Environment variables sourced from ConfigMaps or Secrets are fixed when a container starts. A change to their values requires a workload rollout/restart to update the process environment. Use mounted files or a dedicated reload mechanism when a workload must observe rotations without restart; do not assume env vars update live.
 
-### 7.3 Security and operational requirements
+### 7.4 Security and operational requirements
 
-- Resolve product/account scope and sender identity from authenticated server-side context. External sender IDs are scoped to their platform connection; a matching name or username is not sufficient to link identities across platforms.
+- Resolve product/account scope and sender identity from server-side channel and bot-account context. External sender IDs are scoped to their platform connection. Human identity associations are created and changed only through the relevant bot account's management conversation; do not infer a link from a matching name or username. No separate identity-verification step is required by this common linking flow.
 - The product's authorization layer decides what a participant and agent can read or change. Recheck authorization for inbound events, agent tool calls, callbacks, background work, attachment retrieval and proactive messages.
 - Do not expose channel tokens, webhook secrets, database credentials or storage credentials to the browser or model.
 - Keep each conversation's history and attachment access isolated. For multi-tenant products, enforce tenant scoping in repository queries and application services, not just in prompts.
@@ -443,14 +471,14 @@ All application and supporting workloads receive environment-specific configurat
 - Record platform-specific capability/configuration so the system can explain why a message, mention, attachment or proactive delivery cannot be processed on a given channel.
 - Keep the shared library and gateway maintainable and replaceable. Do not let a platform SDK's internal identifiers or EVE's runtime session model become the public product contract.
 
-### 7.4 Common deployment and parity workflow
+### 7.5 Common deployment and parity workflow
 
 The application, database and supporting services run as Kubernetes workloads. Local development, CI and production use the same Kubernetes resource contracts, CloudNativePG operator, Kustomize bases and Flux reconciliation; environment overlays supply storage classes, replica counts, resource budgets, endpoints and credentials.
 
 Cluster bootstrap and infrastructure provisioning are distinct from workload deployment:
 
 - **Local K3s:** local development uses the same Kubernetes resource contracts as production and does not depend on an Azure emulator.
-- **One-machine VPS:** a host bootstrap checks capacity/prerequisites, configures secrets and hostname, installs K3s and establishes the initial GitOps/bootstrap components. This remains an optional self-managed deployment profile, not a highly available cluster.
+- **One-machine VPS:** a host bootstrap checks capacity/prerequisites, configures secrets and hostname, installs K3s and establishes the initial GitOps/bootstrap components. This is a self-managed deployment profile, not a highly available cluster.
 - **Infrastructure provisioning:** bootstrap a management plane before installing Crossplane. Use supported provider resources/compositions to provision infrastructure; Crossplane cannot bootstrap itself onto a cluster that does not yet exist.
 - **Workload configuration:** Flux reconciles Kustomize bases/overlays for namespaces, policies, CloudNativePG, application services, workers, storage configuration, ingress and monitoring. Operators reconcile their own custom resources. Avoid imperative one-off deployment paths except for documented bootstrap operations.
 
@@ -458,8 +486,8 @@ Cluster bootstrap and infrastructure provisioning are distinct from workload dep
 
 1. Provide one documented command to start the complete local development environment, including K3s, required supporting services, CloudNativePG, the application and the shared Next.js client. It must wait for readiness and leave the environment usable without requiring a sequence of manual startup commands.
 2. Use Flux CD and the local Kustomize overlay to deploy the application, supporting services and CloudNativePG operator. Create the PostgreSQL Cluster resource through GitOps and use a persistent volume from the cluster StorageClass. Retain local backing storage across normal restarts and redeployments; CI may destroy its disposable environment after tests.
-4. Build prebuilt immutable images, deploy through the same Kustomize/Flux manifests and application configuration contracts, and promote the same image digests through subsequent validation.
-5. Test application, database, gateway, frontend, scheduler, task recovery, storage and product capabilities. Include Pod restart/rescheduling, PostgreSQL restart and recovery, persistence across workload restart, upgrade/rollback, event replay, task cancellation and end-to-end checks. Test local persistence separately from backup/restore and machine-loss recovery.
+3. Build prebuilt immutable images, deploy through the same Kustomize/Flux manifests and application configuration contracts, and promote the same image digests through subsequent validation.
+4. Test application, database, gateway, frontend, scheduler, task recovery, storage and product capabilities. Include Pod restart/rescheduling, PostgreSQL restart and recovery, persistence across workload restart, upgrade/rollback, event replay, task cancellation and end-to-end checks. Test local persistence separately from backup/restore and machine-loss recovery.
 
 **One-machine VPS deployment**
 
@@ -478,6 +506,7 @@ The shared platform defines reusable technical contracts. Each product remains r
 - **Conversation history:** the shared layer owns canonical message persistence, context isolation and history retrieval. Each product defines the authorized conversation scope available to its agent.
 - **Proactive delivery:** the shared outbox handles durable delivery, retries and idempotency. Each product defines its own business triggers, consent requirements and message policy.
 - **Attachments:** the shared layer receives, persists/references and authorizes retrieval. Each product decides how its agent processes supported files.
+- **Bot accounts and human roles:** the shared layer owns bot-account identity, platform-identity mappings and the control-conversation mechanism for linking or switching humans. Each product defines its role names, role permissions and business meaning.
 - **Authorization:** the shared layer provides identity and policy interfaces; each product supplies its own principals, roles, tenant/owner scope and authorization decisions.
 - **Agent and client configuration:** the shared EVE integration and Next.js client are common. Agent instructions, tools, actions, approval semantics, views and branding remain product-owned.
 - **Scheduling and tasks:** the shared scheduler, task lifecycle and linked-interaction primitives are common. Each product supplies domain handlers, business records and rules for human-dependent work.
@@ -491,6 +520,10 @@ The shared implementation is complete only when these checks pass independently 
 
 - A user can start and continue a direct conversation using ordinary text without a slash command.
 - A supported platform identity maps multiple DMs/groups/threads to distinct canonical conversations without cross-conversation context leakage.
+- A bot account can be provisioned and connected to a platform installation without confusing the bot account ID with a platform bot ID or a human user ID.
+- A human role can be attached or its platform identity switched from the bot account's management conversation; switching the ID leaves the bot account's context, history, tasks and data unchanged.
+- Switching a bot's platform identity or channel connection also leaves its internal bot account, context, history, tasks and data unchanged.
+- When no provider or other human role is linked, the agent answers from its available authorized information and capabilities, does not invent a human recipient or create a handoff to a nonexistent person, and clearly states when it cannot determine an answer.
 - Addressed group mode works through mentions/replies; full-participation mode works only when configured and permitted by that platform.
 - A web conversation connects directly to the product application and has an isolated canonical conversation/session; it does not create or invite a messaging bot.
 - All product deployments use the same Vercel EVE runtime integration, unified bot gateway, Next.js web client, PostgreSQL/Drizzle persistence contracts and deployment/parity workflow; product-specific actions remain separately authorized.
@@ -501,7 +534,6 @@ The shared implementation is complete only when these checks pass independently 
 - A linked interaction routes an authorized provider/owner response to the originating conversation without merging private transcripts or requiring the customer to repeat the question.
 - A file attached through a supported web or messaging client is received, linked to the correct canonical message/conversation and made available to the authorized agent; unsupported file processing is not assumed.
 - A transient delivery failure or duplicate event does not lose a message or repeat its associated business action.
-- Files attached through supported clients/channels are persisted or referenced safely and made available to the correct agent under conversation authorization; unsupported processing is reported rather than assumed.
 - `search_conversation_history` finds an exact older message from before context compaction and returns its source reference and timestamp.
 - The history tool cannot retrieve messages from an unrelated conversation or product scope.
 - A restart does not erase canonical messages, attachment metadata or pending outbound delivery.
