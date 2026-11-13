@@ -361,8 +361,12 @@ Support:
 - Event- or condition-triggered schedules and scheduled reports.
 - Explicit timezone handling, daylight-saving transitions, next-run calculation, missed-run policy, overlap rules, bounded retries and duplicate prevention.
 - Editing, pausing, resuming and deactivating a schedule while retaining its execution history.
+- Enforce the deployment-wide active-schedule limit and minimum recurring interval configured through the environment variables in §7.3. These limits are shared scheduler policy, not product-specific agent instructions.
+- Count each active schedule definition once, including one-time schedules, recurring schedules and reminders, across all bot accounts in that product deployment. Paused, deactivated, cancelled and completed one-time schedules do not count. Schedule runs/tasks are not additional schedules.
+- Check the active-schedule limit atomically when creating, activating or resuming a schedule so concurrent requests cannot exceed the configured limit. Reject a request that would exceed the limit with a clear explanation; do not silently discard or replace another schedule.
+- Apply the minimum interval to time-based recurring schedules, including recurring reminders, when they are created, edited or resumed. Validate the recurrence cadence, not the lead time of a one-time reminder. Event- or condition-triggered schedules have no fixed recurrence interval and are governed by the active-schedule limit instead.
 
-Persist schedule definitions and each schedule run. A due schedule creates a durable task/run for a product-registered handler; do not rely on an in-memory timer, an active agent session or a connected client as the source of truth. Recheck authorization and relevant business state when the handler executes. The scheduler owns timing and recurrence; the product handler owns the actual action and its domain rules.
+Persist schedule definitions and each schedule run. A due schedule creates a durable task/run for a product-registered handler; do not rely on an in-memory timer, an active agent session or a connected client as the source of truth. Recheck authorization and relevant business state when the handler executes. The scheduler owns timing, recurrence and deployment-wide schedule limits; the product handler owns the actual action and its domain rules.
 
 ### 5.2 Shared asynchronous task lifecycle
 
@@ -453,9 +457,20 @@ Product business data remains owned by the product application. The EVE runtime'
 
 ### 7.3 Environment configuration and secrets
 
-All application-level and runtime configuration is supplied through environment variables only. This includes channel and integration settings, model/provider settings, feature flags, runtime options, limits, voice settings, attachment-ingestion controls and group mention behavior. Do not use database rows, conversational commands or a separate settings UI as an alternative source for application/runtime configuration. Each deployment must receive its configured values through its environment; do not bake deployment-specific values into container images or source code. This rule does not turn bot-account identity mappings, conversation history/context or product business records into environment variables: those are durable application data and remain in the product database.
+All application-level and runtime configuration is supplied through environment variables only. This includes channel and integration settings, model/provider settings, feature flags, runtime options, limits, voice settings, attachment-ingestion controls, group mention behavior and shared scheduler limits. Do not use database rows, conversational commands or a separate settings UI as an alternative source for application/runtime configuration. Each deployment must receive its configured values through its environment; do not bake deployment-specific values into container images or source code. This rule does not turn bot-account identity mappings, conversation history/context or product business records into environment variables: those are durable application data and remain in the product database.
 
-Application workloads receive environment variables through Kubernetes resources: use ConfigMaps for non-sensitive values and Secrets for sensitive values. The attachment-ingestion switch is `CHATBOT_ATTACHMENTS_ENABLED`, and the group mention switch is `CHATBOT_REQUIRE_MENTION`; each deployment explicitly sets both to `true` or `false`.
+The following named common settings must be explicitly configured for each deployment:
+
+| Environment variable | Required value | Purpose and enforcement |
+|---|---|---|
+| `CHATBOT_ATTACHMENTS_ENABLED` | `true` or `false` | Controls whether attachment bytes may enter backend storage and agent processing. When `false`, attachment bytes are not fetched, uploaded, proxied, persisted or passed to the agent. |
+| `CHATBOT_REQUIRE_MENTION` | `true` or `false` | Controls whether a supported mention/reply is required for the bot to respond in group conversations. Direct messages do not require a mention; platform permissions and privacy rules still apply. |
+| `CHATBOT_MAX_ACTIVE_SCHEDULES` | Positive integer | Maximum number of active schedule definitions in the deployment, counted across all bot accounts. Includes one-time schedules, recurring schedules and reminders; excludes paused, deactivated, cancelled and completed one-time schedules. |
+| `CHATBOT_MIN_SCHEDULE_INTERVAL_SECONDS` | Non-negative integer | Minimum recurrence interval for time-based recurring schedules and reminders. For example, `86400` imposes a 24-hour minimum, preventing hourly or every-four-hour recurrence. Set to `0` to disable this minimum-interval restriction. It does not restrict the lead time of a one-time schedule/reminder or the event cadence of event-/condition-triggered schedules. |
+
+The active-schedule cap is enforced atomically on schedule creation, activation and resumption. When the cap is reached, requests that would add another active schedule are rejected with a clear explanation; existing schedules are not silently removed. The minimum recurrence interval is checked when a time-based recurring schedule is created, changed or resumed. These are deployment-wide scheduler limits, not per-bot settings. Both settings apply to every product using the shared scheduler in that deployment.
+
+Application workloads receive environment variables through Kubernetes resources: use ConfigMaps for non-sensitive values and Secrets for sensitive values. All four settings in the table above are non-sensitive and should be supplied through ConfigMaps.
 
 - Use **ConfigMaps** for non-sensitive settings such as log level, feature flags, public service endpoints, allowed origins and non-secret runtime options. Consume individual keys through `env[].valueFrom.configMapKeyRef`, or a controlled set through `envFrom.configMapRef`.
 - Use **Kubernetes Secrets** for credentials and sensitive values such as database passwords, signing keys, OAuth/client secrets, channel tokens, webhook secrets and provider API keys. Reference only the required keys through `secretKeyRef` or a narrowly scoped `envFrom.secretRef`; mount files instead when a library expects certificate/key files or when file-based rotation is preferable.
@@ -475,6 +490,8 @@ Application workloads receive environment variables through Kubernetes resources
 - Persist accepted messages and outbound intents before acknowledging durable receipt. Recover pending delivery after restarts without repeating product actions.
 - Keep logs and diagnostics useful but redact credentials, private attachment content and unnecessary personal information.
 - Record platform-specific capability/configuration so the system can explain why a message, mention, attachment or proactive delivery cannot be processed on a given channel.
+- Verify that the scheduler rejects creation, activation or resumption when the deployment-wide active-schedule cap would be exceeded, including under concurrent requests.
+- Verify that recurring schedules and reminders below the configured minimum recurrence interval are rejected on creation, edit and resumption, while one-time schedules and event-/condition-triggered schedules remain governed by their applicable rules.
 - Keep the shared library and gateway maintainable and replaceable. Do not let a platform SDK's internal identifiers or EVE's runtime session model become the public product contract.
 
 ### 7.5 Common deployment and parity workflow
