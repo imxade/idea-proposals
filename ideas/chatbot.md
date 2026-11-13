@@ -2,7 +2,9 @@
 
 ## Architecture overview
 
-The diagram shows the integrated/library deployment: the shared chatbot package runs inside a product application deployed to Kubernetes. A product may instead deploy the chatbot application separately from its frontend or domain services and connect them through authenticated APIs; that is an optional deployment choice, not a different common-platform contract. Local development uses K3s; production uses the deployment target defined in the technical baseline. Each product deployment has an isolated application namespace, database identity, credentials, authorization scope and product-owned handlers. Deployments may share a cluster where isolation controls are adequate; separate clusters remain an option for stronger isolation.
+> **Kubernetes distribution stack:** K3s for local testing and self-managed VPS/local-machine clusters; AKS, EKS or GKE for managed cloud clusters, with other conformant distributions supported after validation.
+
+The diagram shows the integrated/library deployment: the shared chatbot package runs inside a product application deployed to an operator-provisioned Kubernetes cluster. A product may instead deploy the chatbot application separately from its frontend or domain services and connect them through authenticated APIs; that is an optional deployment choice, not a different common-platform contract. The common platform targets standard Kubernetes APIs and portable Kubernetes resource contracts rather than distribution-specific APIs; the selected distribution is deployment configuration, not a chatbot runtime dependency. Each deployed product instance uses an isolated application namespace, database identity, credentials, authorization scope and product-owned handlers. Multiple product deployments may share a cluster where isolation controls are adequate; separate clusters remain an option for stronger isolation.
 
 ~~~mermaid
 flowchart TB
@@ -20,7 +22,7 @@ flowchart TB
     Flux["Flux CD + Kustomize<br/>Git-based reconciliation"]
   end
 
-  subgraph Cluster["Kubernetes cluster — local K3s / production target"]
+  subgraph Cluster["Operator-provisioned Kubernetes cluster"]
     subgraph ProductHost["Product namespace — isolated application instance"]
       subgraph Common["Reusable TypeScript chatbot library embedded in product application"]
         Gateway["Unified bot gateway and channel adapters"]
@@ -432,14 +434,14 @@ All product deployments use the same application, agent-runtime, data, bot-gatew
 | **Agent runtime** | **Vercel EVE**, integrated through the shared TypeScript platform. All product deployments use the same runtime integration and lifecycle model. | Agent identity/instructions, tools, capability access, policies and workflows are product-specific. |
 | **Application language** | TypeScript for the common library, EVE integration, gateway and application services. | Product domain services extend the same typed contracts. |
 | **Web client** | The common project owns a standalone Next.js application with TypeScript and file-based routing; products and third parties may also build clients against the common API. | Roles, branding, page configuration and product actions. |
-| **Persistence** | PostgreSQL with Drizzle ORM, managed inside Kubernetes by the CloudNativePG operator in every environment. Use separate databases and credentials for each product deployment. Local K3s and production use persistent volumes from their respective StorageClasses. Configure independent base/WAL backups and tested recovery; a PVC alone is not a backup. | Product databases and records remain isolated. The same PostgreSQL operator/configuration model is used locally and in production; size, replica count and StorageClass are environment-specific. |
+| **Persistence** | PostgreSQL with Drizzle ORM, managed inside Kubernetes by the CloudNativePG operator in every environment. Use separate databases and credentials for each product deployment. Use persistent volumes from each cluster's configured StorageClass. Configure independent base/WAL backups and tested recovery; a PVC alone is not a backup. | Product databases and records remain isolated. The same PostgreSQL operator/configuration model is used locally and in production; size, replica count and StorageClass are environment-specific. |
 | **Unified bot gateway** | One shared TypeScript gateway implementation and contract for all bot/channel ingress and egress. Vercel Chat SDK is the preferred adapter layer where its support is adequate. | Separate bot identities, credentials, channel connections, opt-in rules and policies per product. |
-| **Agent/application workloads** | Kubernetes is the common workload environment: K3s locally. Deploy the application, EVE-backed services, workers, Jobs and in-cluster supporting services into declared namespaces. | Capability-specific workloads, permissions and resource profiles remain product-owned. |
-| **Infrastructure provisioning** | Retain Crossplane to provision supported infrastructure resources, including supported Azure resources through a management/bootstrap plane. No Terraform is part of this architecture. | Product-specific resource compositions and permissions. Crossplane does not replace the initial bootstrap needed to create the cluster on which it runs. |
+| **Agent/application workloads** | Kubernetes is the common workload environment. Deploy the application, EVE-backed services, workers, Jobs and in-cluster supporting services into declared namespaces using portable Kubernetes resources and standard APIs. | Capability-specific workloads, permissions and resource profiles remain product-owned. |
+| **Infrastructure provisioning** | Use Crossplane to provision supported infrastructure resources through an already bootstrapped management plane. Cluster creation and initial control-plane bootstrap remain operator/platform responsibilities; Crossplane cannot bootstrap itself onto a cluster that does not yet exist. | Product-specific resource compositions and permissions. Crossplane does not replace the initial bootstrap needed to create the cluster on which it runs. |
 | **Desired state and reconciliation** | Kustomize bases/overlays define cluster, operator and application configuration; Flux CD reconciles Git-hosted desired state, including Crossplane resources and the CloudNativePG operator. | Product-specific manifests and capability resources use the same GitOps workflow. |
-| **Local/CI cluster parity** | Use K3s for local development and Kubernetes workload integration tests. Deploy the application and CloudNativePG into the local cluster using the same Kubernetes resource contracts used for production. | Product test data, capabilities and validation cases remain separate. |
+| **Local/CI cluster parity** | Use a local Kubernetes test cluster for development and workload integration tests. Deploy the application and CloudNativePG using the same portable Kubernetes resource contracts used for self-managed and managed production clusters. | Product test data, capabilities and validation cases remain separate. |
 | **Autoscaling** | Configure Kubernetes Horizontal Pod Autoscalers for eligible stateless APIs/workers with metrics, resource requests and explicit minimum/maximum replicas.  | Do not assume autoscaling is enabled by default. PostgreSQL scaling and replication use database-aware policies, not generic HPA. |
-| **Deployment target** | Local development and integration testing use K3s. Production deployment targets AKS; validate Azure infrastructure provisioning through Crossplane before accepting the target. | Environment-specific overlays supply storage, identity, networking, sizing and secret references. |
+| **Deployment target** | Each deployment targets one configured Kubernetes cluster. Production may use a self-managed cluster or a managed target such as AKS, EKS or GKE after the required APIs, storage, networking and workload capabilities pass validation. | Environment-specific overlays supply storage, identity, networking, sizing and secret references. |
 
 
 
@@ -462,7 +464,7 @@ Conversation records, messages, enabled attachment metadata/references, channel 
 
 The library may provide Drizzle schema definitions, migrations, repository implementations and indexes for these shared chat records. Each product applies and operates them in its own database. Do not run a separate shared chatbot database or allow Chat SDK's short-lived state/cache to be the only copy of a message.
 
-Product business data remains owned by the product application. The EVE runtime's session state is execution context, not proof that a message or business action was persisted successfully. In local development and CI, run CloudNativePG-managed PostgreSQL inside K3s, using a persistent volume. The PVC and the local cluster's backing data volume must be retained across Pod restarts and normal application redeployments; deleting the cluster or losing the host can still destroy local data. CI environments may intentionally be ephemeral. Production deployments use the same CloudNativePG model with environment-appropriate persistent storage, independent backups and tested recovery. Do not use SQLite or a separate PostgreSQL emulator for accepted durable application state.
+Product business data remains owned by the product application. The EVE runtime's session state is execution context, not proof that a message or business action was persisted successfully. In local development and CI, run CloudNativePG-managed PostgreSQL inside the local Kubernetes test cluster, using a persistent volume. Retain the PVC and its backing storage across Pod restarts and normal application redeployments; deleting the cluster or losing the host can still destroy local data. CI environments may intentionally be ephemeral. Production deployments use the same CloudNativePG model with environment-appropriate persistent storage, independent backups and tested recovery. Do not use SQLite or a separate PostgreSQL emulator for accepted durable application state.
 
 ### 7.3 Environment configuration and secrets
 
@@ -512,27 +514,28 @@ Application workloads receive environment variables through Kubernetes resources
 
 ### 7.5 Common deployment and parity workflow
 
-The application, database and supporting services run as Kubernetes workloads. Local development, CI and production use the same Kubernetes resource contracts, CloudNativePG operator, Kustomize bases and Flux reconciliation; environment overlays supply storage classes, replica counts, resource budgets, endpoints and credentials.
+The application, database and supporting services run as Kubernetes workloads. Local development, CI, self-managed non-cloud deployments and managed cloud deployments use the same Kubernetes API/resource contracts, CloudNativePG operator, Kustomize bases and Flux reconciliation; environment overlays supply storage classes, replica counts, resource budgets, endpoints and credentials. The shared chatbot is distribution-agnostic: deployment tooling uses the standard Kubernetes API, while the application runtime does not create clusters, administer nodes or implement a multi-cluster control plane.
 
 Cluster bootstrap and infrastructure provisioning are distinct from workload deployment:
 
-- **Local K3s:** local development uses the same Kubernetes resource contracts as production and does not depend on an Azure emulator.
-- **One-machine VPS:** a host bootstrap checks capacity/prerequisites, configures secrets and hostname, installs K3s and establishes the initial GitOps/bootstrap components. This is a self-managed deployment profile, not a highly available cluster.
+- **Local development and CI:** create or use a local Kubernetes test cluster and apply the same Kubernetes resource contracts used for production. The test cluster is a deployment profile, not a separate application architecture.
+- **Self-managed VPS or local-machine deployment:** the operator checks host capacity and prerequisites, configures secrets, hostname, networking and storage, then bootstraps a Kubernetes cluster on the host and installs the initial GitOps components. This uses the same Kubernetes API and workload model as a cloud-managed cluster. A single-node host is a single failure domain, not a highly available cluster; production-grade use requires appropriate topology, durable storage, off-host backups, tested recovery, monitoring, security and upgrade/maintenance procedures.
+- **Managed cloud deployment:** provision or select the managed cluster through the cloud/provider infrastructure process. AKS, EKS and GKE are supported target profiles after their required Kubernetes APIs, storage, networking, identity and workload capabilities pass validation.
 - **Infrastructure provisioning:** bootstrap a management plane before installing Crossplane. Use supported provider resources/compositions to provision infrastructure; Crossplane cannot bootstrap itself onto a cluster that does not yet exist.
 - **Workload configuration:** Flux reconciles Kustomize bases/overlays for namespaces, policies, CloudNativePG, application services, workers, storage configuration, ingress and monitoring. Operators reconcile their own custom resources. Avoid imperative one-off deployment paths except for documented bootstrap operations.
 
 **Local development and CI**
 
-1. Provide one documented command to start the complete local development environment, including K3s, required supporting services, CloudNativePG, the application and the shared Next.js client. It must wait for readiness and leave the environment usable without requiring a sequence of manual startup commands.
+1. Provide one documented command to start the complete local development environment, including the local Kubernetes test cluster, required supporting services, CloudNativePG, the application and the shared Next.js client. It must wait for readiness and leave the environment usable without requiring a sequence of manual startup commands.
 2. Use Flux CD and the local Kustomize overlay to deploy the application, supporting services and CloudNativePG operator. Create the PostgreSQL Cluster resource through GitOps and use a persistent volume from the cluster StorageClass. Retain local backing storage across normal restarts and redeployments; CI may destroy its disposable environment after tests.
 3. Build prebuilt immutable images, deploy through the same Kustomize/Flux manifests and application configuration contracts, and promote the same image digests through subsequent validation.
 4. Test application, database, gateway, frontend, scheduler, task recovery, storage and product capabilities. Include Pod restart/rescheduling, PostgreSQL restart and recovery, persistence across workload restart, upgrade/rollback, event replay, task cancellation and end-to-end checks. Test local persistence separately from backup/restore and machine-loss recovery.
 
 **One-machine VPS deployment**
 
-1. Use the same immutable application images, Kustomize manifests, Crossplane resources and Flux CD reconciliation flow validated locally and in CI. Install K3s on the host and run the application, PostgreSQL and supported services inside that cluster within the host's resource budget.
-2. Deploy CloudNativePG-managed PostgreSQL with persistent K3s volumes. Configure backups outside the primary database volume and test recovery. Do not substitute SQLite or a separate external PostgreSQL service for the standard deployment.
-3. The shared Next.js application may run inside K3s for this deployment profile.
+1. Use the same immutable application images, Kustomize manifests, Crossplane resources and Flux CD reconciliation flow validated locally and in CI. Bootstrap a self-managed Kubernetes cluster on the VPS or local machine, then run the application, PostgreSQL and supported services as workloads inside that cluster within the host's resource budget.
+2. Deploy CloudNativePG-managed PostgreSQL with persistent volumes from the cluster's configured StorageClass. Configure backups outside the primary database volume and test recovery. Do not substitute SQLite or a separate external PostgreSQL service for the standard deployment.
+3. The shared Next.js application may run inside the self-managed cluster for this deployment profile.
 
 A successful unit-test run is not evidence of deployment parity. Do not substitute an ad-hoc Compose deployment or host-run service for this workflow.
 
@@ -541,25 +544,7 @@ A successful unit-test run is not evidence of deployment parity. Do not substitu
 
 A community, company or project organization can use the shared chatbot as a common front door for members, contributors and maintainers. The organization supplies its own membership rules, knowledge, domain actions and meeting policies; the shared platform supplies channel normalization, identity mapping, canonical conversations, linked interactions, durable scheduling and outbound delivery.
 
-~~~mermaid
-flowchart TB
-  Admin["Organization administrator"] --> Config["Authorized workspace configuration<br/>channels, roles, mention and access policy"]
-  Member["Member / contributor"] --> Channels["Enabled group, thread or direct message"]
-  Channels <--> Gateway["Shared channel gateway<br/>identity mapping and access checks"]
-  Gateway <--> Conversation["Canonical conversations<br/>history, routing and agent runtime"]
-  Conversation <--> Agent["Organization agent<br/>answer, retrieve context and use tools"]
-  OrgData["Organization-owned instructions, policies,<br/>project and event information"] <--> Tools["Product-provided context and action tools"]
-  Tools <--> Agent
-  Agent -->|"Missing or unclear information"| Pending["Linked interaction<br/>durable request and maintainer routing"]
-  Pending --> Maintainer["Authorized maintainer"]
-  Maintainer -->|"Verified response"| Pending
-  Pending --> Conversation
-  Agent -->|"Meeting request"| Meeting["Organization meeting / availability service"]
-  Meeting --> Scheduler["Shared durable scheduler<br/>confirmations and reminders"]
-  Scheduler --> Channels
-  Admin -->|"Approved announcement and audience"| Outbound["Shared outbound delivery<br/>channel permissions and opt-in checks"]
-  Outbound --> Channels
-~~~
+
 
 ### Example flow
 
