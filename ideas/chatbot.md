@@ -8,7 +8,7 @@ The diagram shows the integrated/library deployment: the shared chatbot package 
 flowchart TB
   subgraph Clients["Shared interaction surfaces"]
     Browser["Browser user"]
-    Web["Standalone shared Next.js web application<br/>Local: Kubernetes workload / Azure: Static Web Apps"]
+    Web["Standalone shared web application<br/>Local: Kubernetes workload / Azure: Static Web Apps"]
     Discord["Discord"]
     WhatsApp["WhatsApp Business"]
     Other["Other supported channel adapters"]
@@ -121,7 +121,7 @@ The shared package should expose these modules/interfaces:
 | **Channel adapters** | Receive platform/web events, verify and normalize them, preserve platform references, and deliver outbound messages. |
 | **Bot account and human-role registry** | Maintain each bot account's stable application identity, connect its platform installations, associate human platform identities with product-defined roles, and manage those associations from the bot account's control conversation. |
 | **Conversation service and repository** | Create and resolve canonical conversations, associate messages and participants, persist messages, maintain isolated context and provide indexed history retrieval/search. |
-| **Shared web application** | Own and provide the standalone reusable Next.js browser chat application, including conversation history, transcript/composer, streaming, voice, file attachments, progress/events and authenticated API integration. |
+| **Shared web application** | Own and provide the standalone reusable browser chat application, including conversation history, transcript/composer, streaming, voice, file attachments, progress/events and authenticated API integration. |
 | **Unified bot gateway** | Provide the common ingress/egress path for configured bot channels: authenticate and normalize events, route them to the correct product agent and dispatch authorized outbound messages. |
 | **Vercel EVE runtime integration** | Run each product deployment on the same EVE runtime baseline, including agent lifecycle, sessions, tool calling, workflows, delegation and agent events. |
 | **Outbound message dispatcher** | Send agent- or application-originated messages without an active inbound turn; persist delivery intent and retry safely. |
@@ -281,7 +281,7 @@ Agent replies are persisted as canonical messages and delivered through the adap
 
 The shared web client receives messages and status/progress events through the product's authenticated application API and a streaming transport appropriate to the client. Messaging clients receive platform-native messages. A live browser connection is not required for the service to continue a task or deliver a later message.
 
-The common project owns the shared standalone Next.js web application and its reusable chat experience. Products configure its identity, roles, authorization and product actions. The common conversation/API contracts also allow a product or third party to build a separate client of its own; that does not transfer ownership of the shared web application.
+The common project owns the standalone shared web application and its reusable chat experience. Products configure its identity, roles, authorization and product actions. The common conversation/API contracts also allow a product or third party to build a separate client of its own; that does not transfer ownership of the shared web application.
 
 ### 3.3 Proactive outbound text — independent of an incoming user turn
 
@@ -302,13 +302,13 @@ Proactive sending is still subject to platform rules. Some platforms require a u
 
 ## 4. Shared web client
 
-The shared package includes the reusable browser-based chat client, not merely a web transport adapter or API contract. The common project owns the standalone Next.js application. All product deployments can use it and configure product identity, authorization, capabilities, branding and visible workspaces; they may also build another client against the common API.
+The shared package includes the reusable browser-based chat client, not merely a web transport adapter or API contract. The common project owns the standalone shared web application. All product deployments can use it and configure product identity, authorization, capabilities, branding and visible workspaces; they may also build another client against the common API.
 
 ### 4.1 Framework and application boundary
 
-- Implement the shared web client using **Next.js with TypeScript and file-based routing**. Do not prescribe a specific Next.js routing mode.
+- Implement the shared web client in TypeScript using one of the supported frontend options listed in the common technical stack. Keep the client framework replaceable and preserve the common API and event contracts.
 - The browser client connects directly to the host product's authenticated application API. Each web conversation maps to its own canonical conversation and agent-runtime session/context; it does not create a messaging bot or a separate agent process.
-- The common project owns and ships the standalone shared Next.js web application. It connects to the host product's authenticated application API and can be deployed separately from the product backend.
+- The common project owns and ships the standalone shared web application. It connects to the host product's authenticated application API and can be deployed separately from the product backend.
 - Products may use the shared web application as-is or build their own web/mobile client against the documented common conversation and event APIs. A custom client does not replace or redefine the shared application.
 - The same client must support both desktop and mobile browser layouts. Do not create a native desktop application as part of this shared scope.
 
@@ -431,7 +431,7 @@ All product deployments use the same application, agent-runtime, data, bot-gatew
 |---|---|---|
 | **Agent runtime** | **Vercel EVE**, integrated through the shared TypeScript platform. All product deployments use the same runtime integration and lifecycle model. | Agent identity/instructions, tools, capability access, policies and workflows are product-specific. |
 | **Application language** | TypeScript for the common library, EVE integration, gateway and application services. | Product domain services extend the same typed contracts. |
-| **Web client** | The common project owns a standalone Next.js application with TypeScript and file-based routing; products and third parties may also build clients against the common API. | Roles, branding, page configuration and product actions. |
+| **Web client** | Preferred frontend options are **Cloudflare Vinext** and **Vite+**; **Next.js** is also supported. Use TypeScript and preserve the framework-independent authenticated conversation, streaming, attachment and event contracts. The common project owns and ships the shared browser client; products and third parties may also build clients against the common API. | Roles, branding, page configuration and product actions. |
 | **Persistence** | PostgreSQL with Drizzle ORM, managed inside Kubernetes by the CloudNativePG operator in every environment. Use separate databases and credentials for each product deployment. Use persistent volumes from each cluster's configured StorageClass. Configure independent base/WAL backups and tested recovery; a PVC alone is not a backup. | Product databases and records remain isolated. The same PostgreSQL operator/configuration model is used locally and in production; size, replica count and StorageClass are environment-specific. |
 | **Unified bot gateway** | One shared TypeScript gateway implementation and contract for all bot/channel ingress and egress. Vercel Chat SDK is the preferred adapter layer where its support is adequate. | Separate bot identities, credentials, channel connections, opt-in rules and policies per product. |
 | **Agent/application workloads** | Kubernetes is the common workload environment. Deploy the application, EVE-backed services, workers, Jobs and in-cluster supporting services into declared namespaces using portable Kubernetes resources and standard APIs. | Capability-specific workloads, permissions and resource profiles remain product-owned. |
@@ -453,7 +453,7 @@ Vercel Chat SDK is the preferred shared **messaging transport/adapter layer**, n
 - Use a custom adapter when no suitable adapter exists or a platform feature is missing. Do not claim support solely because a generic Chat SDK interface exists.
 - Chat SDK adapter state may be used for adapter-specific subscriptions, locks, deduplication or caching. It must not become the canonical product transcript or replace the application's full message store.
 - The shared EVE runtime integration consumes normalized turns from the common gateway. EVE's Chat SDK channel may be used as an internal bridge where appropriate, but inbound/outbound messages must still pass through shared persistence, identity, authorization, history-search and delivery contracts.
-- The Chat SDK web adapter is a transport option, not the shared browser application. The shared Next.js client uses the host product API, durable conversation store, attachment endpoints and outbound event/outbox contracts; do not assume the adapter alone provides uploads, complete history, durable proactive push or product-specific actions.
+- The Chat SDK web adapter is a transport option, not the shared browser application. The shared browser client uses the host product API, durable conversation store, attachment endpoints and outbound event/outbox contracts; do not assume the adapter alone provides uploads, complete history, durable proactive push or product-specific actions.
 
 References: [Chat SDK repository and feature overview](https://github.com/vercel/chat), [Chat SDK documentation](https://chat-sdk.dev/docs/getting-started), [EVE Chat SDK channel](https://github.com/vercel/eve/blob/main/docs/channels/chat-sdk.mdx), [Vercel guidance on Chat SDK and EVE](https://vercel.com/kb/guide/chat-sdk-and-eve), [Chat SDK web adapter details](https://github.com/vercel/chat/blob/main/packages/adapter-web/README.md), [Chat SDK adapter catalog](https://chat-sdk.dev/docs/create-chat-sdk).
 
@@ -525,7 +525,7 @@ Cluster bootstrap and infrastructure provisioning are distinct from workload dep
 
 **Local development and CI**
 
-1. Provide one documented command to start the complete local development environment, including the local Kubernetes test cluster, required supporting services, CloudNativePG, the application and the shared Next.js client. It must wait for readiness and leave the environment usable without requiring a sequence of manual startup commands.
+1. Provide one documented command to start the complete local development environment, including the local Kubernetes test cluster, required supporting services, CloudNativePG, the application and the shared browser client. It must wait for readiness and leave the environment usable without requiring a sequence of manual startup commands.
 2. Use Flux CD and the local Kustomize overlay to deploy the application, supporting services and CloudNativePG operator. Create the PostgreSQL Cluster resource through GitOps and use a persistent volume from the cluster StorageClass. Retain local backing storage across normal restarts and redeployments; CI may destroy its disposable environment after tests.
 3. Build prebuilt immutable images, deploy through the same Kustomize/Flux manifests and application configuration contracts, and promote the same image digests through subsequent validation.
 4. Test application, database, gateway, frontend, scheduler, task recovery, storage and product capabilities. Include Pod restart/rescheduling, PostgreSQL restart and recovery, persistence across workload restart, upgrade/rollback, event replay, task cancellation and end-to-end checks. Test local persistence separately from backup/restore and machine-loss recovery.
@@ -534,7 +534,7 @@ Cluster bootstrap and infrastructure provisioning are distinct from workload dep
 
 1. Use the same immutable application images, Kustomize manifests, Crossplane resources and Flux CD reconciliation flow validated locally and in CI. Bootstrap a self-managed Kubernetes cluster on the VPS or local machine, then run the application, PostgreSQL and supported services as workloads inside that cluster within the host's resource budget.
 2. Deploy CloudNativePG-managed PostgreSQL with persistent volumes from the cluster's configured StorageClass. Configure backups outside the primary database volume and test recovery. Do not substitute SQLite or a separate external PostgreSQL service for the standard deployment.
-3. The shared Next.js application may run inside the self-managed cluster for this deployment profile.
+3. The shared browser application may run inside the self-managed cluster for this deployment profile.
 
 A successful unit-test run is not evidence of deployment parity. Do not substitute an ad-hoc Compose deployment or host-run service for this workflow.
 
@@ -566,7 +566,7 @@ The shared platform defines reusable technical contracts. Each product remains r
 - **Attachments:** the shared layer receives, persists/references and authorizes retrieval. Each product decides how its agent processes supported files.
 - **Bot accounts and provider groups:** the shared layer owns bot-account identity, platform connections and the association of authorized provider-side groups. Each product defines provider roles, group access policy and the business meaning of information shared from each group.
 - **Authorization:** the shared layer provides identity and policy interfaces; each product supplies its own principals, roles, tenant/owner scope and authorization decisions.
-- **Agent and client configuration:** the shared EVE integration and Next.js client are common. Agent instructions, tools, actions, approval semantics, views and branding remain product-owned.
+- **Agent and client configuration:** the shared EVE integration and browser client are common. Agent instructions, tools, actions, approval semantics, views and branding remain product-owned.
 - **Scheduling and tasks:** the shared scheduler, task lifecycle and linked-interaction primitives are common. Each product supplies domain handlers, business records and rules for human-dependent work.
 - **Kubernetes access:** Kubernetes is deployment infrastructure, not a default agent capability. A product may expose narrowly scoped cluster operations only through its own authorized service boundary.
 
@@ -587,7 +587,7 @@ The shared implementation is complete only when these checks pass independently 
 - When no relevant provider-side group is connected, the agent does not invent a recipient or handoff; it clearly states that it cannot determine the answer from available context.
 - With `CHATBOT_REQUIRE_MENTION=true`, the bot ignores unaddressed group messages and responds to supported mentions/replies; with `false`, it can respond to ordinary group messages without an @mention, subject to platform delivery and permissions. Direct messages work without a mention in either mode.
 - A web conversation connects directly to the product application and has an isolated canonical conversation/session; it does not create or invite a messaging bot.
-- All product deployments use the same Vercel EVE runtime integration, unified bot gateway, Next.js web client, PostgreSQL/Drizzle persistence contracts and deployment/parity workflow; product-specific actions remain separately authorized.
+- All product deployments use the same Vercel EVE runtime integration, unified bot gateway, shared web client, PostgreSQL/Drizzle persistence contracts and deployment/parity workflow; product-specific actions remain separately authorized.
 - A proactive text message can be queued and delivered without an active or immediately preceding user turn, provided the platform permits that destination and the required consent/opt-in exists.
 - One-time, recurring, interval and event-triggered schedules produce durable runs in the configured timezone and remain due/recoverable while the agent or client is offline.
 - Accepted asynchronous tasks survive client disconnect and process restart; cancellation is recorded and stale workers are fenced from committing.
