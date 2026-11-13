@@ -387,9 +387,11 @@ Provide a durable interaction ID that can link an originating conversation, rela
 
 The interaction service provides scoped context projections and event-based handoff/routing; it does not merge complete transcripts or grant participants access to one another's private messages. Check authorization whenever context is shared, a participant is added, a response is attached or a message is sent. Product handlers define participant roles, what information may be shared and how a response resolves the originating request. This mechanism supports product-specific pending questions and owner-dependent work without making any product's approval or business rules common.
 
+Expose authorized common agent-facing operations to open a pending interaction, inspect an individual request, list requests visible to the current principal, submit a response and resolve a request where permitted. These are generic lifecycle operations; products supply the business trigger, category/priority, responder selection, context projection and resolution meaning.
+
 ### 5.5 Persistence and API requirements
 
-The common interfaces must support creating, reading, updating, pausing/deactivating and listing schedules; querying schedule runs; creating, inspecting, cancelling and resuming eligible tasks; recording checkpoints and worker leases; recording/replaying event cursors; and opening, linking, routing, responding to and resolving interactions. Persist the corresponding schedule definitions/runs, task/run state, event cursors/deduplication keys, interaction links/lifecycle and outbound delivery records in the product's database. These are functional data/API requirements, not a fixed schema or exhaustive endpoint list.
+The common interfaces must support creating, reading, updating, pausing/deactivating and listing schedules; querying schedule runs; creating, inspecting, cancelling and resuming eligible tasks; recording checkpoints and worker leases; recording/replaying event cursors; and opening, inspecting/listing, linking, routing, responding to and resolving interactions. Persist the corresponding schedule definitions/runs, task/run state, event cursors/deduplication keys, interaction links/lifecycle and outbound delivery records in the product's database. These are functional data/API requirements, not a fixed schema or exhaustive endpoint list.
 
 
 ## 6. Search the complete persisted conversation history
