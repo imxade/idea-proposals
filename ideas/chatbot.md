@@ -2,7 +2,7 @@
 
 ## Architecture overview
 
-The diagram shows the shared library embedded in a product application deployed to Kubernetes. Local development uses K3s; production uses the deployment target defined in the technical baseline. Each deployment has an isolated application namespace, database identity, credentials, authorization scope and product-owned handlers. Deployments may share a cluster where isolation controls are adequate; separate clusters remain an option for stronger isolation.
+The diagram shows the integrated/library deployment: the shared chatbot package runs inside a product application deployed to Kubernetes. A product may instead deploy the chatbot application separately from its frontend or domain services and connect them through authenticated APIs; that is an optional deployment choice, not a different common-platform contract. Local development uses K3s; production uses the deployment target defined in the technical baseline. Each product deployment has an isolated application namespace, database identity, credentials, authorization scope and product-owned handlers. Deployments may share a cluster where isolation controls are adequate; separate clusters remain an option for stronger isolation.
 
 ~~~mermaid
 flowchart TB
@@ -97,13 +97,13 @@ flowchart TB
 
 **Normative separation rule:** a common requirement is specified here once. The product documents may configure or constrain that requirement for their own use, but must not restate the shared implementation. A product-specific requirement belongs only in that product's document.
 
-## 1. Architecture decision: a reusable library, not a separate service
+## 1. Architecture: reusable library with flexible deployment
 
-Implement the common chatbot layer as a **private, reusable TypeScript library/package** embedded in each product's application. It is not an independently deployed chatbot microservice.
+Implement the common chatbot layer as a **private, reusable TypeScript library/package**. The package is the reusable unit; it does not have to run as an independently deployed service. The recommended integrated mode imports it into each product's backend, but a product may deploy a chatbot application separately when that better fits its application or operational boundaries.
 
-The common platform combines a reusable TypeScript conversation library with one shared Vercel EVE runtime integration. Each product hosts the same platform baseline in its own application/deployment and supplies its own authorization, domain capabilities, agent definitions and product-data scope.
+The common platform combines a reusable TypeScript conversation library with one shared Vercel EVE runtime integration. Each product supplies its own authorization, domain capabilities, agent definitions and product-data scope, whether those are hosted in the same application or reached through a separately deployed service.
 
-This is preferable to a separate service because:
+The integrated/library mode is the recommended default because:
 
 - Each product deployment needs substantially the same message normalization, identity mapping, conversation storage, context retrieval and outbound delivery.
 - A network service would introduce another deployment, API boundary, availability dependency and potential competing owner of conversation history.
@@ -148,7 +148,7 @@ Each product supplies the following through explicit interfaces:
 - Its attachment-processing capabilities. The common environment setting controls whether attachment content enters the backend at all; when enabled, the common layer delivers supported attachments to the agent subject to authorization and product capabilities.
 - Product-owned handlers for scheduled work, asynchronous tasks and linked interactions, plus product-specific events and reasons for proactive messages.
 
-These shared extension interfaces and product-owned lifecycle handlers are in-process modules/providers registered with the host application. This is not a plugin marketplace or a mandatory plugin microservice. This registration requirement does not impose a common tool protocol or registry on every product capability: a product may expose its own tools through in-process integrations, APIs, CLI commands or installed dependencies and provide the deployed agent with the corresponding usage instructions and contracts. A separate API server accepting documented JSON requests and returning asynchronous results is one possible implementation, not a prescribed architecture. A product capability must not gain unrestricted database or platform access merely because it is available to the agent.
+These shared extension interfaces and product-owned lifecycle handlers can be registered as in-process modules/providers when the library is embedded; this is not a plugin marketplace or a mandatory plugin microservice. Product capabilities may be exposed through in-process handlers, same-application endpoints, CLI commands or installed dependencies. Alternatively, the chatbot can run as a separate application/service and call authenticated APIs exposed by a separately deployed product service; a separate frontend can call the chatbot's own endpoints. Both arrangements are supported options, not requirements, and the product may use the server framework suited to its application. In either arrangement, provide the agent with the relevant tool definitions, usage instructions, endpoint/input-output contracts and product-specific context (for example through its configured agent context). Context makes capabilities discoverable; the owning service must still enforce authentication, data scope and business rules. No separate API server, universal API, or common tool protocol/registry is required for every product capability.
 
 ### 1.3 Shared EVE runtime and unified bot gateway
 
