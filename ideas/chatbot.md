@@ -537,7 +537,42 @@ Cluster bootstrap and infrastructure provisioning are distinct from workload dep
 A successful unit-test run is not evidence of deployment parity. Do not substitute an ad-hoc Compose deployment or host-run service for this workflow.
 
 
-## 8. Common versus product-specific boundary
+## 8. Illustrative organizational use case
+
+A community, company or project organization can use the shared chatbot as a common front door for members, contributors and maintainers. The organization supplies its own membership rules, knowledge, domain actions and meeting policies; the shared platform supplies channel normalization, identity mapping, canonical conversations, linked interactions, durable scheduling and outbound delivery.
+
+~~~mermaid
+flowchart TB
+  Admin["Organization administrator"] --> Config["Authorized workspace configuration<br/>channels, roles, mention and access policy"]
+  Member["Member / contributor"] --> Channels["Enabled group, thread or direct message"]
+  Channels <--> Gateway["Shared channel gateway<br/>identity mapping and access checks"]
+  Gateway <--> Conversation["Canonical conversations<br/>history, routing and agent runtime"]
+  Conversation <--> Agent["Organization agent<br/>answer, retrieve context and use tools"]
+  OrgData["Organization-owned instructions, policies,<br/>project and event information"] <--> Tools["Product-provided context and action tools"]
+  Tools <--> Agent
+  Agent -->|"Missing or unclear information"| Pending["Linked interaction<br/>durable request and maintainer routing"]
+  Pending --> Maintainer["Authorized maintainer"]
+  Maintainer -->|"Verified response"| Pending
+  Pending --> Conversation
+  Agent -->|"Meeting request"| Meeting["Organization meeting / availability service"]
+  Meeting --> Scheduler["Shared durable scheduler<br/>confirmations and reminders"]
+  Scheduler --> Channels
+  Admin -->|"Approved announcement and audience"| Outbound["Shared outbound delivery<br/>channel permissions and opt-in checks"]
+  Outbound --> Channels
+~~~
+
+### Example flow
+
+1. An organization administrator connects the bot to the authorized workspace, configures enabled channels and eligible roles, and chooses whether group responses require a mention. Platform identity and channel permissions remain authoritative.
+2. Maintainers provide organization-scoped instructions, policies, project information, event details and meeting availability through the organization's application tools. The agent receives only information applicable to the active organization and conversation.
+3. A contributor asks a question in an enabled channel, thread or direct message. The shared gateway resolves the sender and channel, then routes the message to the correct canonical conversation. The agent answers what it can establish from authorized context.
+4. For a missing or ambiguous detail, the agent opens a linked interaction for an authorized maintainer. The shared platform records and routes the request, correlates the maintainer's response, and returns it to the originating conversation. Reuse in another conversation is allowed only after the organization's application has checked scope and applicability; private member context is not exposed to other members.
+5. A member can ask to arrange a contributor/mentor meeting. The organization's service determines participants and availability; the shared scheduler persists confirmations and reminders in the configured organization timezone. Other questions can continue while a response or meeting detail is pending.
+6. Organization-wide announcements or onboarding messages require an authorized administrator's direction and an explicitly eligible audience. The shared outbound mechanism enforces channel permissions, delivery policy and opt-in requirements; it does not independently decide whom the organization should contact.
+
+This is an illustrative shared-platform use case, not a built-in organization-management product. Membership, role meaning, knowledge scope, meeting rules, audience selection and domain authorization remain organization/product responsibilities.
+
+## 9. Common versus product-specific boundary
 
 The shared platform defines reusable technical contracts. Each product remains responsible for its own domain behavior and authorization:
 
@@ -553,11 +588,12 @@ The shared platform defines reusable technical contracts. Each product remains r
 
 The common library must not own product business records, business workflows, approval policies, domain-specific tools or product-specific deployment topology.
 
-## 9. Shared acceptance checks
+## 10. Shared acceptance checks
 
 The shared implementation is complete only when these checks pass independently in all product deployments:
 
 - A user can start and continue a direct conversation using ordinary text without a slash command.
+- An organization workspace can answer member questions in authorized channels, route missing information to an authorized maintainer through a linked interaction, and return the response to the originating conversation without exposing private member context.
 - A supported platform identity maps multiple DMs/groups/threads to distinct canonical conversations without cross-conversation context leakage.
 - A bot account can be provisioned and connected to a platform installation without confusing the bot account ID with a platform bot ID or a human user ID.
 - A human role can be attached or its platform identity switched from the bot account's management conversation; switching the ID leaves the bot account's context, history, tasks and data unchanged.
