@@ -2,112 +2,58 @@
 
 ## Architecture overview
 
-The diagram shows the integrated/library deployment: the shared chatbot package runs inside a product application deployed to an operator-provisioned Kubernetes cluster. A product may instead deploy the chatbot application separately from its frontend or domain services and connect them through authenticated APIs; that is an optional deployment choice, not a different common-platform contract. The common platform targets standard Kubernetes APIs and portable Kubernetes resource contracts rather than distribution-specific APIs; the selected distribution is deployment configuration, not a chatbot runtime dependency. Each deployed product instance uses an isolated application namespace, database identity, credentials, authorization scope and product-owned handlers. Multiple product deployments may share a cluster where isolation controls are adequate; separate clusters remain an option for stronger isolation.
+The default architecture is a **shared multi-tenant SaaS platform**. Each provider creates and owns its official application/bot identity directly on the relevant platform, authorizes this application to use that identity, and adds it to the provider-controlled destinations it wants connected. There is no internal bot account and no separate provider-group onboarding dashboard. The platform stores provider connections, credentials, configuration, canonical conversations, history and context under strict tenant boundaries.
+
+The shared TypeScript library, Vercel EVE runtime integration and PostgreSQL persistence serve many provider tenants. Tenant identity is resolved from trusted authentication and verified connection metadata. Every read, write, session, tool, task, file and outbound action is tenant-scoped. A provider may add or replace a platform identity without losing application-owned context or history. A replacement identity must be authorized separately and its platform-side memberships/permissions established again; external memberships and conversation identifiers do not automatically transfer.
+
+Shared PostgreSQL and shared runtime infrastructure are the default. Dedicated databases, namespaces or Kubernetes deployments are optional stronger-isolation profiles, not the default SaaS architecture.
 
 ~~~mermaid
 flowchart TB
-  subgraph Clients["Shared interaction surfaces"]
-    Browser["Browser user"]
-    Web["Standalone shared web application<br/>Local: Kubernetes workload / Azure: Static Web Apps"]
-    Discord["Discord"]
-    WhatsApp["WhatsApp Business"]
-    Other["Other supported channel adapters"]
-    Browser <--> Web
+  subgraph Providers["Provider-owned platform identities"]
+    IdentityA["Provider A official application identity"]
+    IdentityB["Provider B official application identity"]
+    IdentityN["Additional provider identities"]
   end
-
-  subgraph Provisioning["Infrastructure and desired-state management"]
-    Crossplane["Crossplane<br/>Supported infrastructure provisioning"]
-    Flux["Flux CD + Kustomize<br/>Git-based reconciliation"]
+  subgraph SaaS["Shared multi-tenant chatbot SaaS"]
+    Auth["Tenant authentication and connection authorization"]
+    Registry["Provider integration / credential registry"]
+    Gateway["Unified gateway and adapters"]
+    Conversation["Canonical conversations and context"]
+    Runtime["Shared EVE runtime pool<br/>tenant-scoped agent sessions"]
+    Scheduler["Durable scheduler and task workers"]
+    Outbox["Authorized outbound dispatcher / outbox"]
+    Tools["Common agent tools"]
+    DB[("Shared PostgreSQL<br/>tenant-scoped records")]
+    Blob[("Tenant-scoped attachment storage")]
+    Auth --> Registry
+    Registry --> Gateway
+    Gateway --> Conversation
+    Conversation <--> Runtime
+    Runtime <--> Tools
+    Runtime --> Outbox
+    Scheduler <--> Runtime
+    Gateway <--> DB
+    Conversation <--> DB
+    Runtime <--> DB
+    Scheduler <--> DB
+    Outbox <--> DB
+    Conversation <--> Blob
   end
-
-  subgraph Cluster["Operator-provisioned Kubernetes cluster"]
-    subgraph ProductHost["Product namespace — isolated application instance"]
-      subgraph Common["Reusable TypeScript chatbot library embedded in product application"]
-        Gateway["Unified bot gateway<br/>Vercel Chat SDK Chat instance<br/>Web and platform adapters"]
-        Conversation["Conversation service and repository"]
-        Attachments["Environment-gated attachment receipt and authorized retrieval"]
-        Runtime["Vercel EVE runtime integration"]
-        Scheduler["Durable scheduler"]
-        Tasks["Asynchronous task/work lifecycle"]
-        Events["Durable event cursors and replay"]
-        Interactions["Linked interaction / mediation service"]
-        Outbound["Outbound dispatcher and durable outbox"]
-        Tools["Common agent tools"]
-        Accounts["Bot account and human-role registry"]
-        Accounts --> Gateway
-        Accounts --> Conversation
-        Accounts <--> Interactions
-        Gateway --> Conversation
-        Conversation <--> Attachments
-        Conversation <--> Runtime
-        Scheduler --> Tasks
-        Events --> Tasks
-        Tasks <--> Runtime
-        Interactions <--> Tasks
-        Runtime <--> Tools
-        Runtime --> Outbound
-        Tasks --> Outbound
-        Interactions --> Outbound
-      end
-
-      subgraph ProductExtension["Product-owned extension points"]
-        Policy["Authenticated principal and authorization resolver"]
-        Agent["Product agent definition and instructions"]
-        Handlers["Product action handlers and domain services"]
-      end
-
-      DB[("Product-specific PostgreSQL database/user<br/>CloudNativePG-managed")]
-      Blob[("Product-scoped attachment storage interface / durable backend")]
-
-      Policy --> Gateway
-      Policy --> Accounts
-      Policy --> Conversation
-      Policy --> Attachments
-      Agent <--> Runtime
-      Handlers <--> Runtime
-      Handlers <--> Tasks
-      Handlers <--> Scheduler
-      Handlers <--> Interactions
-      Conversation <--> DB
-      Scheduler <--> DB
-      Tasks <--> DB
-      Events <--> DB
-      Interactions <--> DB
-      Outbound <--> DB
-      Attachments <--> Blob
-    end
-
-    CNPG["CloudNativePG operator"]
-    PGStorage[("PostgreSQL persistent volume(s)<br/>provided by cluster StorageClass")]
-    CNPG --> DB
-    DB --> PGStorage
-  end
-
-  Crossplane -. "Provisions supported infrastructure" .-> Cluster
-  Flux -. "Reconciles operators, services and applications" .-> Cluster
-  Web <-->|"Chat SDK Web adapter / authenticated HTTP + SSE"| Gateway
-  Discord <-->|"Chat SDK platform adapter / platform events"| Gateway
-  WhatsApp <-->|"Chat SDK platform adapter / platform events"| Gateway
-  Other <-->|"Chat SDK platform adapters / platform events"| Gateway
-  Outbound --> Gateway
+  IdentityA <-->|"authorized events and sends"| Gateway
+  IdentityB <-->|"authorized events and sends"| Gateway
+  IdentityN <-->|"authorized events and sends"| Gateway
 ~~~
 
-**Normative separation rule:** a common requirement is specified here once. The product documents may configure or constrain that requirement for their own use, but must not restate the shared implementation. A product-specific requirement belongs only in that product's document.
+**Normative separation rule:** common requirements are specified here once. Provider-specific behavior and authorization are supplied through tenant-scoped extension points; they must not create competing shared implementations or weaken the common isolation contract.
 
-## 1. Architecture: reusable library with flexible deployment
+## 1. Architecture: shared SaaS with reusable library boundaries
 
-Implement the common chatbot layer as a **private, reusable TypeScript library/package**. The package is the reusable unit; it does not have to run as an independently deployed service. The recommended integrated mode imports it into each product's backend, but a product may deploy a chatbot application separately when that better fits its application or operational boundaries.
+Implement the common chatbot layer as a **private, reusable TypeScript library/package** used by the shared SaaS application. The package is the reusable implementation unit; it is not a separately operated service per provider. The default deployment is one shared multi-tenant application, shared EVE runtime pool and shared PostgreSQL persistence layer. Optional dedicated deployments may be offered for providers requiring stronger contractual or regulatory isolation, but they are not the default.
 
-The common platform combines a reusable TypeScript conversation library with one shared Vercel EVE runtime integration. Each product supplies its own authorization, domain capabilities, agent definitions and product-data scope, whether those are hosted in the same application or reached through a separately deployed service.
+Each provider tenant supplies its authorization policy, agent configuration, domain capabilities and data scope through explicit tenant-scoped extension points. Dedicated databases, namespaces or deployments remain available when a provider's isolation requirements justify the operational cost.
 
-The integrated/library mode is the recommended default because:
-
-- Each product deployment needs substantially the same message normalization, identity mapping, conversation storage, context retrieval and outbound delivery.
-- A network service would introduce another deployment, API boundary, availability dependency and potential competing owner of conversation history.
-- Each product already has its own application database and different security and domain rules. The shared library can use the host application's database without combining product data.
-- A library lets consuming products evolve independently while reusing the same tested conversation contracts and adapters.
-
-The `chatbot/` directory in this repository contains the three specifications. It is not itself the implementation package. The eventual package can be versioned and consumed by both application codebases.
+The chatbot/ directory in this repository contains the specifications. It is not itself the implementation package. The eventual package can be versioned and consumed by the shared SaaS application and optional dedicated deployments.
 
 ### 1.1 Package boundaries
 
@@ -115,128 +61,94 @@ The shared package should expose these modules/interfaces:
 
 | Module or interface | Shared responsibility |
 |---|---|
-| **Channel adapters** | Receive platform/web events, verify and normalize them, preserve platform references, and deliver outbound messages. |
-| **Bot account and human-role registry** | Maintain each bot account's stable application identity, connect its platform installations, associate human platform identities with product-defined roles, and manage those associations from the bot account's control conversation. |
+| **Provider integration registry** | Maintain tenant-owned connections to provider-created platform identities, authorization state, credential references, capabilities and lifecycle. It does not create an internal bot identity. |
+| **Principal and identity mapping** | Map authenticated application principals and external platform identities to a tenant and its authorization policy without treating platform IDs as global identities. |
 | **Conversation service and repository** | Create and resolve canonical conversations, associate messages and participants, persist messages, maintain isolated context and provide indexed history retrieval/search. |
-| **Shared web application** | Own and provide the standalone reusable browser chat application, including conversation history, transcript/composer, streaming, voice, file attachments, progress/events and integration with the Chat SDK Web adapter. All browser chat turns use the same gateway path as messaging platforms. |
-| **Unified bot gateway** | Provide the common ingress/egress path for all configured channels, including browser chat through `@chat-adapter/web`: authenticate and normalize events, route them to the correct product agent and dispatch authorized outbound messages. |
-| **Vercel EVE runtime integration** | Run each product deployment on the same EVE runtime baseline, including agent lifecycle, sessions, tool calling, workflows, delegation and agent events. |
-| **Outbound message dispatcher** | Send agent- or application-originated messages without an active inbound turn; persist delivery intent and retry safely. |
-| **Attachment receipt and retrieval** | When enabled by the deployment environment, receive attachments delivered by supported clients/channels, persist their metadata/content references and provide authorized access to the agent. When disabled, stop attachment bytes before backend ingestion, storage or agent processing. |
-| **Scheduler service and repository** | Persist one-time, recurring, interval and event/condition schedules; calculate due times and create durable executions using each product's database. |
-| **Task/work service and repository** | Provide shared asynchronous task/run identities, lifecycle, dependencies, cancellation, checkpoints, leases, retries and recovery. Product handlers implement the work itself. |
-| **Linked interaction service and repository** | Correlate related conversations, questions, deferred work and replies through scoped, authorized interaction records without merging full transcripts. |
-| **Product action registry** | Register product-owned handlers for scheduled work, asynchronous tasks and interaction events under product authorization. |
-| **Common agent tools** | Expose the shared `search_conversation_history` tool and authorized common task/schedule/interaction operations to the connected agent runtime. |
+| **Shared web application** | Own the reusable browser chat application, including conversation history, transcript/composer, streaming, voice, file attachments and progress/events. |
+| **Unified gateway** | Provide common ingress/egress for browser and supported platform connections; authenticate, normalize, route and dispatch tenant-authorized messages. |
+| **Vercel EVE runtime integration** | Run tenant-scoped agent sessions on the shared EVE runtime baseline, including lifecycle, tool calling, workflows, delegation and events. |
+| **Outbound dispatcher and durable outbox** | Send owner-authorized or tenant-workflow-authorized messages through a connected provider identity; persist delivery intent and retry safely. |
+| **Attachment receipt and retrieval** | Enforce attachment-ingestion settings, store tenant-scoped metadata/content references and provide authorized retrieval. |
+| **Scheduler service and repository** | Persist schedules and durable executions in shared PostgreSQL with tenant ownership, quotas and fair scheduling. |
+| **Task/work service and repository** | Provide tenant-scoped asynchronous task/run identities, lifecycle, dependencies, cancellation, checkpoints, leases, retries and recovery. |
+| **Linked interaction service and repository** | Correlate related conversations, questions, deferred work and replies through scoped, authorized interaction records without merging transcripts. |
+| **Product action registry** | Register tenant/product-owned handlers for scheduled work, asynchronous tasks and interaction events under tenant authorization. |
+| **Common agent tools** | Expose conversation-history search and authorized common task/schedule/interaction operations to the connected agent runtime. |
 
-The common platform standardizes on Vercel EVE for agent execution. The conversation library, scheduler, task lifecycle, linked-interaction mechanism and bot gateway remain modular TypeScript components around that runtime; none embeds product-specific business logic.
+The common platform standardizes on Vercel EVE for agent execution. The conversation library, scheduler, task lifecycle, linked-interaction mechanism and gateway remain modular TypeScript components around that runtime; none embeds provider-specific business logic.
 
+### 1.2 Tenant and product extension points
 
-### 1.2 Product extension points
+Each provider tenant supplies its authenticated principal and authorization resolver, human-role definitions, tenant data scope, agent instructions, capabilities, tools and domain handlers. The common layer maps verified external identities to tenant principals; the tenant defines role meaning and permissions.
 
-Each product supplies the following through explicit interfaces:
+Tenant-specific context and configuration are stored as access-controlled tenant data and composed with deployment-wide defaults. Context must be appended without replacing existing system instructions. The tenant supplies usage instructions and input/output contracts for its domain capabilities. Attachment access and processing remain tenant-authorized.
 
-- Its authenticated principal and authorization/policy resolver.
-- Its human-role definitions, role-specific permissions and human-context scope. The common layer manages account-scoped identity associations; the product defines what each role can do.
-- Its own database connection and product-specific tenant/owner scope.
-- Its product-specific agent definition, instructions, capabilities and communication policy.
-- Its deployment-provided additional system context, exposed through the `CHATBOT_CONTEXT` environment variable. The common chatbot loads this value at startup and appends it to the system-role context already configured for the agent, preserving all existing system instructions rather than replacing or overwriting them. The added content is sent with role `system`; it is not user content, a developer-role message or ordinary retrieved context. The product owns the value.
-- Its domain-specific tools/capabilities and tool authorization. The product also supplies the usage instructions, context and request/response contracts the deployed agent needs to use those capabilities.
-- Its attachment-processing capabilities. The common environment setting controls whether attachment content enters the backend at all; when enabled, the common layer delivers supported attachments to the agent subject to authorization and product capabilities.
-- Product-owned handlers for scheduled work, asynchronous tasks and linked interactions, plus product-specific events and reasons for proactive messages.
+Tenant-owned handlers for schedules, asynchronous tasks and linked interactions are registered through in-process modules/providers or authenticated APIs. The agent can invoke these capabilities when relevant, but context does not grant permission: the owning service must still enforce authentication, data scope and business rules. All chat turns enter through the unified gateway; non-chat resource operations such as listing history, attachment transfer and settings retrieval remain separate authorized application services. No separate API server, universal API or common tool protocol/registry is required for every tenant capability.
 
-These shared extension interfaces and product-owned lifecycle handlers can be registered as in-process modules/providers when the library is embedded; this is not a plugin marketplace or a mandatory plugin microservice. Product capabilities may be exposed to the agent through in-process handlers, same-application endpoints, CLI commands, installed dependencies or authenticated APIs provided by independently deployed product services. The agent can invoke those product-owned capabilities when relevant, using the tool definitions, usage instructions, input/output contracts and product-specific context supplied to it (including through its configured agent context). The normal direction for a product capability is therefore the chatbot/agent calling the product service; the product service does not have to call the chatbot's APIs. All user chat turns, including browser turns, enter through the unified gateway using the configured Chat SDK adapter; the browser uses `@chat-adapter/web` rather than a separate chatbot conversation API or stream endpoint. The shared web application may still use host-product resource operations for non-chat functions such as listing persisted conversations, retrieving older history, obtaining authorized attachment uploads/downloads and loading product settings. Those operations do not accept chat turns or provide a parallel agent-response stream. When the chatbot is embedded as a library, these capabilities can run within the same application/server, alongside endpoints implemented with the product's chosen framework. When the chatbot is deployed separately, it can call authenticated APIs exposed by the product service. Both are supported deployment options, not requirements. Context makes capabilities discoverable and usable by the agent; it does not grant permission, so the owning service must still enforce authentication, data scope and business rules. No separate API server, universal API or common tool protocol/registry is required for every product capability.
+### 1.3 Shared EVE runtime and unified gateway
 
-### 1.3 Shared EVE runtime and unified bot gateway
+All tenants use the same **shared Vercel EVE runtime baseline and runtime pool**. The platform may host many tenant-scoped agent instances/sessions on that shared runtime; it does not create a separate runtime deployment for every provider. Each request is bound to a tenant using trusted server-side authentication and a verified integration connection. An EVE session ID is never accepted as proof of tenant ownership.
 
-All product deployments use the same **Vercel EVE runtime baseline**, integrated through the common TypeScript platform. The shared runtime layer owns the common agent execution lifecycle, runtime sessions, tool invocation, workflow execution, delegation primitives, streaming/events and runtime-to-conversation mapping. A product defines its own agent identity/instructions, capabilities, tools, authorization and domain workflows on top of that foundation.
+EVE session state is execution context, not the canonical record of conversations or business state. Persist messages, task/business records, schedules, checkpoints and delivery intents in shared PostgreSQL with tenant ownership and enforce authorization in repository/service boundaries. Agent instructions, tools, capabilities, delegation policy and domain workflows remain tenant-owned; the common platform provides EVE's generic runtime primitives.
 
-EVE session state is execution context, not the canonical record of conversations or product business state. Persist messages, task/business records, schedules, checkpoints and delivery intents through the product's authoritative data services. Product-specific specialist agents, worker definitions, selection, delegation policy and result evaluation remain part of the product agent; the common chatbot provides EVE's generic runtime primitives but does not define a shared specialist registry or product-neutral subagent orchestration. All product deployments use the same EVE integration and version baseline, not one shared cross-product agent instance. Each product has its own deployment, agent instances, runtime sessions, identities and data; capability-specific tools and workloads remain product-owned.
+The **unified gateway** is a shared library module and service interface, not an internal bot account or per-provider gateway. It receives authenticated browser requests and verified platform events, resolves the tenant and authorized provider connection from trusted server-side context, normalizes messages into the common contract, routes turns to tenant-scoped EVE sessions and returns replies through the originating connection.
 
-The **unified bot gateway** is also common. It is a shared library module and service interface, not a separately operated cross-product bot service. It is the single ingress/egress path for browser chat and supported messaging platforms. Use one Vercel Chat SDK `Chat` instance with `@chat-adapter/web` for browser chat and the appropriate Chat SDK platform adapters for supported messaging channels, then bridge accepted turns into the shared EVE runtime through EVE's Chat SDK channel integration:
-- Receives browser requests through the authenticated Chat SDK Web adapter and platform events through the configured messaging adapters; each adapter performs its applicable request authentication, webhook verification and event parsing.
-- Resolves the product deployment, bot account, authenticated participant, channel connection and canonical conversation scope. The Web adapter's `getUser` callback must resolve the caller from the host product's verified server-side session; never trust a browser-supplied user or tenant identity.
-- Normalizes messages, attachments, replies, threads and platform metadata into the common message contract.
-- Routes accepted turns from every adapter to that product's shared EVE runtime integration using the EVE Chat SDK channel bridge.
-- Returns agent replies through the originating adapter. Browser replies stream through the Web adapter's AI SDK UI message-stream/SSE transport; messaging replies use their platform adapter.
-- Supports durable, idempotent proactive outbound delivery through the shared outbox where the destination adapter supports it. The current Web adapter does not provide multi-tab or disconnected-browser proactive push; browser-targeted background messages remain persisted in the canonical conversation and are shown when the client next synchronizes.
+An authorized owner can explicitly initiate outbound messages through a selected connected provider identity. Any other background delivery must be tied to a tenant-authorized workflow and eligible destination; the platform does not independently select prospects or perform autonomous cold outreach. Persist messages and delivery intents before acknowledging durable receipt.
 
-The gateway implementation and contracts are common, but **bot identities, credentials, channel installations, configuration, conversation data and authorization remain isolated per product and deployment**. Each bot account has a stable internal account ID and its own context, conversations, data and configured channel connections. Separate product deployments do not share bot accounts or conversation stores. The gateway must enforce each product's own policy and platform capability limits.
+The gateway and runtime are shared, while provider identities, credentials, connection metadata, conversation data, context and authorization remain tenant-isolated. Do not assume built-in adapters support arbitrary per-tenant credential resolution; validate each adapter and use a custom adapter/connection registry where needed.
 
 ## 2. Logical agents, platform identities and conversations
 
-### 2.1 Logical agent and platform identities
+### 2.1 Provider-owned platform identities
 
-Each product has its own logical agent. For each configured messaging integration, that product provisions the corresponding platform identity or addressable account:
+Each provider creates and owns its own official application/bot identity directly on the relevant platform. The provider authorizes this application to receive events and send messages through that identity using the platform's supported credential or authorization mechanisms. The application does not create a separate internal bot account and does not own the provider's platform identity.
 
-- Discord: a Discord application/bot user.
-- Telegram: a Telegram bot.
-- Matrix: a Matrix bot account.
-- WhatsApp: a WhatsApp Business account/number, which is not the same identity model as a conventional username-based bot.
-- Other supported messaging platforms: their native application, bot or business identity.
+The provider adds its identity to the groups, rooms, workspaces or other supported destinations it wants connected and grants the necessary permissions directly on the platform. There is no separate provider-group onboarding dashboard or internal bot-management conversation.
 
-These are channel identities for reaching the product's logical agent; they are not separate agents. Each product has separate platform identities, credentials, conversation database and authorization scope.
+The platform stores a tenant-scoped connection record containing the provider, platform, external identity, authorization/credential reference, effective capabilities and lifecycle status. Secrets are held in a secrets manager or encrypted credential store, never in prompts, browser state or ordinary logs. A provider may authorize multiple identities and may revoke, replace or add connections at any time.
 
-One configured platform identity can serve multiple direct messages, groups, channels and threads. Do not create a new bot identity or a new agent process for each conversation.
+Replacing an identity does not delete or reset application-owned context, canonical conversation history, tasks, schedules or configuration. The replacement identity must be separately authorized, and its memberships/permissions must be established on the platform. Do not assume external group membership, platform conversation identifiers or message history transfer to the replacement identity. Retain application-owned history; associate newly received conversations only through explicit, authorized mapping rules.
 
-The identity must be installed, invited, joined or connected through the platform's own mechanism. A username mention alone does not grant membership, room access or permission to read messages.
+A platform identity is a transport identity for a tenant's logical agent, not a separate agent runtime. One connection may serve multiple conversations where the platform permits it. Platform membership, access and message visibility remain controlled by the platform's own installation, invite and permission mechanisms.
 
-### 2.2 Bot account onboarding and human identity management
+### 2.2 Provider connection lifecycle and authorization
 
-Each service has a **bot account** with a stable internal account ID. This account is the durable owner of the bot's configuration, conversation history, context, linked interactions, tasks and other service data. It is distinct from the bot's Discord/Telegram/WhatsApp/Matrix identity and from any human's platform user ID. A bot account can have multiple channel connections, each mapped to its own platform identity and installation context.
+1. The provider creates its official application/bot identity on the platform.
+2. The provider authorizes the SaaS application to use that identity through the platform's supported credential or authorization flow.
+3. The provider adds the identity to the destinations it wants connected and grants the required permissions directly on the platform.
+4. The application verifies authorization, records a tenant-scoped connection and its effective capabilities, and begins accepting verified events.
+5. The provider can revoke authorization, replace the identity or add another identity. The application updates only affected connection records and credential references; tenant-owned history, context and business data remain intact.
 
-The onboarding flow is:
+There is no internal bot account or ID, management conversation, provider sign-in to an application-owned bot, or separate group-registration dashboard. The platform identity itself is the provider's messaging identity.
 
-1. Create or provision the bot account for the service.
-2. Install, invite or connect the bot through the chosen platform's normal mechanism and associate that channel connection with the bot account.
-3. Open the bot account's own management conversation and use ordinary language to configure it. Commands may be supplied as shortcuts, but are not required for ordinary onboarding.
-4. Providers connect their provider-side groups to the bot account by signing in to the bot account (using its stable bot account ID) and authorizing the bot to access the selected groups. The bot account can be connected to multiple groups, including groups used by different providers or provider helpers. The common flow does not require a separate registration website or a separate direct-message relationship with each provider.
+The application maps external sender identities to authenticated tenant principals only through trusted identity claims or an explicit tenant-controlled linking process. A display name or matching username is never sufficient proof. Changing a person's external platform identity updates only the relevant identity mapping after re-authentication; it does not change tenant ownership or reset application-owned context.
 
-The bot account's management conversation is the control surface for managing its platform connections and authorized provider-side groups. Group membership and access are established through the platform's normal sign-in, invite and permission mechanisms. A group cannot be attached to an unrelated bot account or customer conversation.
+Each connection has its own credentials, permissions, capability record and external destinations. Connections belonging to one tenant can access only that tenant's conversations and context. A connection must not read or send through another tenant's identity.
 
-When a linked person changes their platform user ID, they use the bot account's management conversation to disconnect the previous ID and connect the replacement. The application updates the human-to-platform identity mapping only. It does not create a new bot account, change the bot account ID, reset or migrate the bot's context, or alter its conversation history, tasks, linked interactions, configuration or other account data. The existing bot account continues as before under the replacement platform identity.
+An owner or other authorized tenant principal may explicitly initiate a message through a selected connected identity. The application verifies the principal's permission, destination eligibility, connection status and platform rules before queuing delivery. This is owner-directed operation, not autonomous prospecting or cold outreach.
 
-Changing the bot's own platform identity or replacing one of its channel connections is also done from the same bot-account management conversation. It updates only the affected platform-connection mapping; the internal bot account and all of its context and data remain unchanged.
-
-The common layer treats connected provider-side groups as communication and context sources for the bot account. Providers and their helpers contribute through those groups rather than through a required one-to-one provider DM workflow. The bot account can connect to several groups; incoming questions, answers and supporting context are collected from the authorized groups, with their source and group scope preserved. The agent decides which information is relevant, what may be shared, and which response should be returned to the customer.
-
-**Provider-side communication happens in connected groups.** A provider or helper can ask a question, add context or correct an answer in any group connected to the bot account. The agent uses the available group context and capabilities to respond where appropriate, and records useful contributions with their source and group scope. It does not need a separate direct-message channel to each provider.
-
-**When a customer asks a question**, the agent first checks its authorized context. If more information is needed, it forwards the question and the necessary context to the connected provider-side groups. One provider or several providers/helpers may respond in those groups. The agent evaluates the replies and supporting context, decides what is relevant and permitted for the customer's scope, records the source, and returns an appropriate answer to the originating customer conversation. The customer should not have to repeat the question.
-
-If no relevant provider-side group is connected, the agent does not invent a recipient or missing information. It tells the customer that it cannot determine the answer from the available context.
+If a provider revokes or replaces a connection, stop accepting events and sending through revoked credentials, mark the connection unavailable, and retain application-owned history. Do not silently rebind old external conversations to a replacement identity.
 
 ### 2.3 Canonical conversation mapping
 
-The application creates a stable internal conversation ID and maps it to the external platform context. The mapping must preserve enough information to route messages back to the right place:
+The application creates a stable internal conversation ID and maps it to the external platform context. The mapping must preserve tenant ID, authorized provider-connection ID, platform/channel type, external identity, destination/thread identifiers, external sender/message identifiers scoped to the connection, timestamps and reply/reference metadata.
 
-- Product/deployment, bot account ID and any product-specific tenant/owner scope.
-- Channel type and channel-connection identity.
-- External platform account, room, group, channel or DM identifier.
-- External thread/topic identifier where applicable.
-- External sender identity and message identifier.
-- Message timestamp, reply/reference target and relevant platform metadata.
+A direct message, web conversation, group/channel thread or other independent context receives its own canonical conversation mapping. Context is never mixed across unrelated groups, DMs, tenants or web conversations. A web conversation maps the authenticated tenant principal and client conversation identifier to a canonical conversation ID and EVE session. Adapter thread identifiers are routing identifiers, not the public conversation contract.
 
-A direct message, web conversation, group/channel thread or other independent conversation context receives its own canonical conversation mapping. A group's channel/thread context is not mixed with unrelated groups, DMs or web conversations.
-
-A web conversation enters through the Chat SDK Web adapter and the unified gateway; it does not connect to a separate chatbot conversation API, invite or create a messaging bot. Map the authenticated user plus the Web adapter conversation/thread identifier to a canonical conversation ID and EVE session. Each new web conversation has its own canonical conversation and agent-runtime session/context; reopening an existing conversation resumes its existing context. Treat Chat SDK thread identifiers as adapter-level routing identifiers, not as the public product conversation contract. The shared logical agent can therefore serve many isolated conversations without creating a separate agent identity or process for each one.
-
-A runtime session ID is an execution identifier mapped to the canonical conversation ID. It is not the source of truth for message history. If a runtime is replaced, the canonical conversation and its persisted history remain available.
-
-A previous conversation is not silently added to the current one. Cross-conversation retrieval requires an explicit reference and an independent authorization check.
+A runtime session ID is an execution identifier mapped to the canonical conversation ID and tenant. It is not the source of truth for message history or authorization. Cross-conversation retrieval requires an explicit reference and an independent authorization check.
 
 ### 2.4 Direct, group and channel interaction
 
 Ordinary natural language is the normal interaction method. Slash commands may be supplied as shortcuts, but users must not need a command to make an ordinary request.
 
-- **Provider-side groups:** connected groups are the normal provider communication surface. The bot account may connect to multiple groups, and the agent can forward questions/context to the relevant connected groups and evaluate responses from them. A one-to-one provider DM is not required.
+- **Provider-side groups:** connected groups are the normal provider communication surface. A provider-owned identity may participate in multiple destinations the provider has connected; the agent can use only context received through authorized connections. A one-to-one provider DM is not required.
 - **Mention-required group mode:** when `CHATBOT_REQUIRE_MENTION=true`, the bot responds in group conversations only to messages that mention/address it (including supported platform-native reply-to-bot behavior). Unaddressed group messages are ignored.
 - **Mention-not-required group mode:** when `CHATBOT_REQUIRE_MENTION=false`, the bot may respond to ordinary group messages without an @mention, subject to platform permissions and the conversation's access policy.
 - **Replies and threads:** replying to an agent message or another message can continue or refer to that exchange. Preserve the referenced message and thread context.
 
 The deployment environment variable `CHATBOT_REQUIRE_MENTION` controls whether the bot must be mentioned before it responds in a connected group and must be explicitly set to `true` or `false`. Platform privacy settings and permissions still determine which group messages reach the bot; disabling the mention requirement cannot override them. The shared library must not impose a universal mention-only, public-only or private-only restriction.
 
-**Initial messaging targets are Discord, WhatsApp Business and Telegram.** The shared platform supports these three adapters in its initial integration baseline; each product configures the subset it uses. Additional adapters can follow the same common contract.
+**Initial messaging targets are Discord, WhatsApp Business and Telegram.** The shared platform supports these three adapters in its initial integration baseline; each tenant configures the subset it uses. Additional adapters can follow the same common contract.
 
 Actual access and visibility remain controlled by platform installation, membership, privacy settings, permissions, intents, user consent and policies. The library must not promise that every platform can expose all messages in all spaces. A platform adapter must report its real capabilities rather than silently pretending that an unsupported mode works.
 
@@ -270,7 +182,7 @@ All clients and messaging integrations normalize inbound content into the shared
 - Attachment metadata and references only when attachment ingestion is enabled for that deployment.
 - Original event time and relevant platform interaction metadata.
 
-The application authenticates the event, resolves the product/account scope, checks access and deduplicates it before dispatching the turn to the shared Vercel EVE runtime. Before any attachment bytes are fetched from a messaging platform, uploaded by a web client, proxied to the application, persisted or exposed to the agent, the ingress path must enforce the deployment environment variable `CHATBOT_ATTACHMENTS_ENABLED` (`true` or `false`). Each deployment must set this value explicitly. When `false`, do not fetch or download attachment content, accept or proxy web-upload bytes, store attachment content or durable attachment references, or include attachments in the EVE/agent turn; ignore the attachment and continue processing any accompanying text. The client should disable its upload control when possible, but the backend must enforce the setting even if a client or platform still sends attachment metadata or an upload request. A lightweight indication that an attachment was ignored may be shown to the sender, but the attachment itself must not be transferred into backend storage or AI processing. This prevents unnecessary backend storage and attachment-related AI/token usage. When `true`, the normal authorized attachment receipt, storage, retrieval and agent-capability rules apply. Do not trust a model-supplied tenant, customer, owner or conversation identifier.
+The application authenticates the event, resolves tenant and connection scope from trusted server-side context, checks access and deduplicates it before dispatching the turn to the shared Vercel EVE runtime. Before any attachment bytes are fetched from a messaging platform, uploaded by a web client, proxied to the application, persisted or exposed to the agent, the ingress path must enforce the deployment environment variable `CHATBOT_ATTACHMENTS_ENABLED` (`true` or `false`). Each deployment must set this value explicitly. When `false`, do not fetch or download attachment content, accept or proxy web-upload bytes, store attachment content or durable attachment references, or include attachments in the EVE/agent turn; ignore the attachment and continue processing any accompanying text. The client should disable its upload control when possible, but the backend must enforce the setting even if a client or platform still sends attachment metadata or an upload request. A lightweight indication that an attachment was ignored may be shown to the sender, but the attachment itself must not be transferred into backend storage or AI processing. This prevents unnecessary backend storage and attachment-related AI/token usage. When `true`, the normal authorized attachment receipt, storage, retrieval and agent-capability rules apply. Do not trust a model-supplied tenant, customer, owner or conversation identifier.
 
 ### 3.2 Agent and application messages
 
@@ -282,20 +194,15 @@ The common project owns the standalone shared web application and its reusable c
 
 ### 3.3 Proactive outbound text — independent of an incoming user turn
 
-The agent/application **must be able to send a text message without a preceding or currently active user message**. This is a first-class outbound capability, not merely a reply operation.
+An authorized owner **must be able to explicitly initiate a text message through a selected connected provider identity without an active inbound turn**. This is an owner-directed outbound capability, not permission for autonomous prospecting or cold outreach.
 
-It must support messages initiated by:
-- An agent continuing or completing background work.
-- A product event or state change.
-- A scheduled task or reminder.
-- A follow-up that becomes ready later.
-- A product-specific workflow that needs to contact an already known participant or conversation.
+The owner-triggered operation must support an explicitly selected eligible destination and a clear message body. Separately, tenant-authorized workflows may deliver necessary service notifications or continue an already established interaction when configured and eligible. The platform must not independently choose new recipients or initiate unsolicited outreach.
 
-The outbound operation accepts an authorized target (canonical conversation or previously resolved recipient/channel destination), content, cause/reference and idempotency key. It must not require an inbound message object or an open web client.
+The outbound operation accepts the authenticated owner/tenant principal, selected provider connection, authorized destination, content, cause/reference and idempotency key. It must not require an inbound message object or an open web client.
 
 Use a durable outbound queue/outbox. Persist intent before delivery, record attempts and outcomes, retry transient failures, and deduplicate retries so a message is not sent repeatedly because of a timeout or restart. Keep message delivery separate from the domain action that triggered it; a delivery failure must not undo a completed booking, task or other product operation.
 
-Proactive sending is still subject to platform rules. Some platforms require a user to initiate a DM, grant consent, or fall within a messaging window; some contexts cannot be contacted without an existing membership or thread. The product may send only where it has a valid destination and the platform permits it. This capability does not grant permission for unsolicited bulk DMs or bypass user opt-in.
+Owner-initiated sending is still subject to platform rules. Some destinations require prior interaction, consent or an eligible messaging window. Send only to a destination the provider has connected and the platform currently permits. An explicit owner action does not bypass recipient eligibility, platform policy or required opt-in.
 
 ## 4. Shared web client
 
@@ -338,7 +245,7 @@ The common client provides reusable presentation and action contracts for:
 - Artifact/file references and click-time download resolution supplied by the host product.
 - External access links that open in a separate browser tab/window when the host product supplies them.
 
-The shared client does not implement product-specific approval policies, compute controls, booking workflows or provider/customer operations. It renders authorized product-supplied actions through extension points. Each product supplies its own domain actions and approval semantics. A product must not expose an action unless its server-side authorization permits it.
+The shared client does not implement product-specific approval policies, compute controls, booking workflows or provider/customer operations. It renders authorized product-supplied actions through extension points. Each tenant supplies its own domain actions and approval semantics. A product must not expose an action unless its server-side authorization permits it.
 
 ### 4.5 Client reliability and security
 
@@ -351,7 +258,7 @@ The shared client does not implement product-specific approval policies, compute
 
 ## 5. Durable scheduling, asynchronous tasks and linked interactions
 
-The common platform provides reusable mechanisms for durable schedules, asynchronous work and linked interactions. Each product persists these records in its own authoritative database and registers authorized handlers. The common layer determines when work is due, tracks its lifecycle and routes related events; it does not implement product-domain behavior.
+The common platform provides reusable mechanisms for durable schedules, asynchronous work and linked interactions. Each product persists these records in its own authoritative database and registers authorized handlers. The common layer determines when work is due, tracks its lifecycle and routes related events; it does not implement tenant-domain behavior.
 
 ### 5.1 Shared scheduler
 
@@ -362,11 +269,11 @@ Support:
 - Explicit timezone handling, daylight-saving transitions, next-run calculation, missed-run policy, overlap rules, bounded retries and duplicate prevention.
 - Editing, pausing, resuming and deactivating a schedule while retaining its execution history.
 - Enforce the deployment-wide active-schedule limit and minimum recurring interval configured through the environment variables in §7.3. These limits are shared scheduler policy, not product-specific agent instructions.
-- Count each active schedule definition once, including one-time schedules, recurring schedules and reminders, across all bot accounts in that product deployment. Paused, deactivated, cancelled and completed one-time schedules do not count. Schedule runs/tasks are not additional schedules.
+- Count each active schedule definition once, including one-time schedules, recurring schedules and reminders, across all tenants in that product deployment. Paused, deactivated, cancelled and completed one-time schedules do not count. Schedule runs/tasks are not additional schedules.
 - Check the active-schedule limit atomically when creating, activating or resuming a schedule so concurrent requests cannot exceed the configured limit. Reject a request that would exceed the limit with a clear explanation; do not silently discard or replace another schedule.
 - Apply the minimum interval to time-based recurring schedules, including recurring reminders, when they are created, edited or resumed. Validate the recurrence cadence, not the lead time of a one-time reminder. Event- or condition-triggered schedules have no fixed recurrence interval and are governed by the active-schedule limit instead.
 
-Persist schedule definitions and each schedule run. A due schedule creates a durable task/run for a product-registered handler; do not rely on an in-memory timer, an active agent session or a connected client as the source of truth. Recheck authorization and relevant business state when the handler executes. The scheduler owns timing, recurrence and deployment-wide schedule limits; the product handler owns the actual action and its domain rules.
+Persist schedule definitions and each schedule run. A due schedule creates a durable task/run for a tenant-registered handler; do not rely on an in-memory timer, an active agent session or a connected client as the source of truth. Recheck authorization and relevant business state when the handler executes. The scheduler owns timing, recurrence and deployment-wide schedule limits; the product handler owns the actual action and its domain rules.
 
 ### 5.2 Shared asynchronous task lifecycle
 
@@ -424,15 +331,15 @@ Implement this as indexed text search over the persisted database (PostgreSQL fu
 
 ## 7. Common technical and deployment foundation
 
-All product deployments use the same application, agent-runtime, data, bot-gateway and deployment-validation baseline. The only technology differences belong to product-specific capabilities that the agent operates or integrates with; they do not create separate chatbot, runtime or deployment foundations.
+The SaaS runs a shared application, EVE runtime pool, gateway and PostgreSQL persistence layer for many provider tenants. Tenant isolation is enforced in application services and repositories. The only technology differences belong to product-specific capabilities that the agent operates or integrates with; they do not create separate chatbot, runtime or deployment foundations.
 
 | Area | Common technical baseline | Product-specific boundary |
 |---|---|---|
 | **Agent runtime** | **Vercel EVE**, integrated through the shared TypeScript platform. All product deployments use the same runtime integration and lifecycle model. | Agent identity/instructions, tools, capability access, policies and workflows are product-specific. |
 | **Application language** | TypeScript for the common library, EVE integration, gateway and application services. | Product domain services extend the same typed contracts. |
 | **Web client** | Preferred frontend options are **Cloudflare Vinext** and **Vite+**; **Next.js** is also supported. Use TypeScript and the Chat SDK Web adapter client integration (React, Vue or Svelte as appropriate). Browser chat turns and response streaming use the same Chat SDK gateway as messaging platforms; canonical history and non-chat resources remain in product-owned services. | Roles, branding, page configuration and product actions. |
-| **Persistence** | PostgreSQL with Drizzle ORM, managed inside Kubernetes by the CloudNativePG operator in every environment. Use separate databases and credentials for each product deployment. Use persistent volumes from each cluster's configured StorageClass. Configure independent base/WAL backups and tested recovery; a PVC alone is not a backup. | Product databases and records remain isolated. The same PostgreSQL operator/configuration model is used locally and in production; size, replica count and StorageClass are environment-specific. |
-| **Unified bot gateway** | One shared TypeScript Chat SDK `Chat` instance and gateway contract for all bot/channel ingress and egress, including browser chat through `@chat-adapter/web`; bridge normalized turns into EVE through `chatSdkChannel`. | Separate bot identities, credentials, channel connections, opt-in rules and policies per product. |
+| **Persistence** | PostgreSQL with Drizzle ORM, managed inside Kubernetes by the CloudNativePG operator in every environment. Use shared PostgreSQL by default with tenant-scoped records, strict row/service authorization and least-privilege service credentials. Dedicated databases or clusters are optional stronger-isolation profiles. Use persistent volumes from each cluster's configured StorageClass. Configure independent base/WAL backups and tested recovery; a PVC alone is not a backup. | Tenant records remain logically isolated in shared PostgreSQL. Dedicated databases/clusters may be selected for contractual or regulatory isolation; the same PostgreSQL operator/configuration model is used locally and in production. |
+| **Unified bot gateway** | One shared TypeScript Chat SDK `Chat` instance and gateway contract for all bot/channel ingress and egress, including browser chat through `@chat-adapter/web`; bridge normalized turns into EVE through `chatSdkChannel`. | Provider-owned identities and credentials are stored per tenant connection; authorization and delivery policies are tenant-scoped. |
 | **Agent/application workloads** | Kubernetes is the common workload environment. Deploy the application, EVE-backed services, workers, Jobs and in-cluster supporting services into declared namespaces using portable Kubernetes resources and standard APIs. | Capability-specific workloads, permissions and resource profiles remain product-owned. |
 | **Infrastructure provisioning** | Use Crossplane to provision supported infrastructure resources through an already bootstrapped management plane. Cluster creation and initial control-plane bootstrap remain operator/platform responsibilities; Crossplane cannot bootstrap itself onto a cluster that does not yet exist. | Product-specific resource compositions and permissions. Crossplane does not replace the initial bootstrap needed to create the cluster on which it runs. |
 | **Desired state and reconciliation** | Kustomize bases/overlays define cluster, operator and application configuration; Flux CD reconciles Git-hosted desired state, including Crossplane resources and the CloudNativePG operator. | Product-specific manifests and capability resources use the same GitOps workflow. |
@@ -461,32 +368,32 @@ References: [Chat SDK repository and feature overview](https://github.com/vercel
 
 ### 7.2 Persistence ownership
 
-Conversation records, messages, enabled attachment metadata/references, channel identity mappings, and outbound delivery records are persisted through the host product's PostgreSQL database and storage interfaces, using Drizzle ORM. When `CHATBOT_ATTACHMENTS_ENABLED=false`, no attachment content or durable attachment reference is persisted.
+Conversation records, messages, enabled attachment metadata/references, provider-connection mappings, credential references and outbound delivery records are persisted in shared PostgreSQL and tenant-scoped storage interfaces, using Drizzle ORM. Every record carries an immutable tenant ownership key. When `CHATBOT_ATTACHMENTS_ENABLED=false`, no attachment content or durable attachment reference is persisted.
 
-The library may provide Drizzle schema definitions, migrations, repository implementations and indexes for these shared chat records. Each product applies and operates them in its own database. Do not run a separate shared chatbot database or allow Chat SDK's short-lived state/cache to be the only copy of a message.
+The library provides Drizzle schema definitions, migrations, repository implementations and indexes for shared chat records. The SaaS applies and operates them in shared PostgreSQL with tenant-aware keys, constraints and repository guards. Dedicated databases are optional stronger-isolation deployments. Do not allow Chat SDK's short-lived state/cache to be the only copy of a message.
 
-Product business data remains owned by the product application. The EVE runtime's session state is execution context, not proof that a message or business action was persisted successfully. In local development and CI, run CloudNativePG-managed PostgreSQL inside the local Kubernetes test cluster, using a persistent volume. Retain the PVC and its backing storage across Pod restarts and normal application redeployments; deleting the cluster or losing the host can still destroy local data. CI environments may intentionally be ephemeral. Production deployments use the same CloudNativePG model with environment-appropriate persistent storage, independent backups and tested recovery. Do not use SQLite or a separate PostgreSQL emulator for accepted durable application state.
+Tenant business data remains owned by the tenant's application or domain services. The EVE runtime's session state is execution context, not proof that a message or business action was persisted successfully. In local development and CI, run CloudNativePG-managed PostgreSQL inside the local Kubernetes test cluster, using a persistent volume. Retain the PVC and its backing storage across Pod restarts and normal application redeployments; deleting the cluster or losing the host can still destroy local data. CI environments may intentionally be ephemeral. Production deployments use the same CloudNativePG model with environment-appropriate persistent storage, independent backups and tested recovery. Do not use SQLite or a separate PostgreSQL emulator for accepted durable application state.
 
 ### 7.3 Environment configuration and secrets
 
-All application-level and runtime configuration is supplied through environment variables only. This includes channel and integration settings, model/provider settings, feature flags, runtime options, limits, voice settings, attachment-ingestion controls, group mention behavior and shared scheduler limits. Do not use database rows, conversational commands or a separate settings UI as an alternative source for application/runtime configuration. Each deployment must receive its configured values through its environment; do not bake deployment-specific values into container images or source code. This rule does not turn bot-account identity mappings, conversation history/context or product business records into environment variables: those are durable application data and remain in the product database.
+All application-level and runtime configuration is supplied through environment variables only. This includes channel and integration settings, model/provider settings, feature flags, runtime options, limits, voice settings, attachment-ingestion controls, group mention behavior and shared scheduler limits. Do not use database rows, conversational commands or a separate settings UI as an alternative source for application/runtime configuration. Each deployment must receive its configured values through its environment; do not bake deployment-specific values into container images or source code. This rule does not turn tenant identity mappings, provider connections, conversation history/context or business records into environment variables: these are durable application data stored in the shared tenant-scoped database.
 
-The following named common settings must be explicitly configured for each deployment:
+The following named common settings must be explicitly configured for the shared deployment:
 
 | Environment variable | Required value | Purpose and enforcement |
 |---|---|---|
 | `CHATBOT_ATTACHMENTS_ENABLED` | `true` or `false` | Controls whether attachment bytes may enter backend storage and agent processing. When `false`, attachment bytes are not fetched, uploaded, proxied, persisted or passed to the agent. |
 | `CHATBOT_CONTEXT` | Required, non-secret text | Deployment-provided additional system context. Load at application startup and append it to the agent's existing system-role context, preserving existing system instructions; do not replace or overwrite them. Send the added content with role `system`, not as user content, a developer-role message or ordinary retrieved context. |
 | `CHATBOT_REQUIRE_MENTION` | `true` or `false` | Controls whether a supported mention/reply is required for the bot to respond in group conversations. Direct messages do not require a mention; platform permissions and privacy rules still apply. |
-| `CHATBOT_MAX_ACTIVE_SCHEDULES` | Positive integer | Maximum number of active schedule definitions in the deployment, counted across all bot accounts. Includes one-time schedules, recurring schedules and reminders; excludes paused, deactivated, cancelled and completed one-time schedules. |
+| `CHATBOT_MAX_ACTIVE_SCHEDULES` | Positive integer | Maximum number of active schedule definitions across the shared deployment; tenant-level quotas/fairness are enforced separately. Includes one-time schedules, recurring schedules and reminders; excludes paused, deactivated, cancelled and completed one-time schedules. |
 | `CHATBOT_MIN_SCHEDULE_INTERVAL_SECONDS` | Non-negative integer | Minimum recurrence interval for time-based recurring schedules and reminders. For example, `86400` imposes a 24-hour minimum, preventing hourly or every-four-hour recurrence. Set to `0` to disable this minimum-interval restriction. It does not restrict the lead time of a one-time schedule/reminder or the event cadence of event-/condition-triggered schedules. |
 | `CHATBOT_AI_CONFIG` | Required JSON object | Configures the AI-compatible API endpoint in one object. `base_url` is required; `model` is optional and is supplied only when the endpoint requires an explicit model name; `api_key` is optional and is supplied only when the endpoint requires API-key authentication. No provider selector or provider-specific default endpoint is assumed. |
 
-Set **`CHATBOT_CONTEXT`** independently for each product deployment. Load its value from the application process environment at startup and append its text to the system-role context already configured for the agent. Preserve the existing system prompt/instructions and their content; `CHATBOT_CONTEXT` adds deployment-specific instructions and must never replace or overwrite the existing system-role context. Include the added text with role `system`, alongside the product agent's configured instructions and before turn-specific conversation messages; it does not replace conversation history. Supply this non-secret value through a ConfigMap or equivalent deployment environment configuration. Do not put credentials or other secrets in it. Updating the value takes effect after a workload restart or rollout.
+Set **CHATBOT_CONTEXT** as shared deployment defaults. Tenant-specific additions are stored as tenant-owned, access-controlled configuration and composed with the base context without replacing it. Load its value from the application process environment at startup and append its text to the system-role context already configured for the agent. Preserve the existing system prompt/instructions and their content; `CHATBOT_CONTEXT` adds deployment-specific instructions and must never replace or overwrite the existing system-role context. Include the added text with role `system`, alongside the product agent's configured instructions and before turn-specific conversation messages; it does not replace conversation history. Supply this non-secret value through a ConfigMap or equivalent deployment environment configuration. Do not put credentials or other secrets in it. Updating the value takes effect after a workload restart or rollout.
 
 Enable and configure the common scheduler and periodic-worker functionality through deployment environment variables (for example, ConfigMaps for non-sensitive controls). These are common platform features; each product supplies the scheduled handlers and work to execute. Keep feature controls and operational settings in deployment configuration, not in product agent instructions.
 
-The active-schedule cap is enforced atomically on schedule creation, activation and resumption. When the cap is reached, requests that would add another active schedule are rejected with a clear explanation; existing schedules are not silently removed. The minimum recurrence interval is checked when a time-based recurring schedule is created, changed or resumed. These are deployment-wide scheduler limits, not per-bot settings. Both settings apply to every product using the shared scheduler in that deployment.
+The active-schedule cap is enforced atomically on schedule creation, activation and resumption. When the cap is reached, requests that would add another active schedule are rejected with a clear explanation; existing schedules are not silently removed. The minimum recurrence interval is checked when a time-based recurring schedule is created, changed or resumed. The recurrence minimum is a shared deployment setting. The active-schedule value is a deployment safety cap; enforce tenant quotas/fairness separately.
 
 Application workloads receive environment variables through Kubernetes resources: use ConfigMaps for non-sensitive values and Secrets for sensitive values. The attachment, mention and scheduler-limit settings are non-sensitive and should be supplied through ConfigMaps. Supply `CHATBOT_AI_CONFIG` through a Kubernetes ConfigMap when its object does not contain an API key; when `api_key` is present, supply the entire JSON object through a Kubernetes Secret so the credential is not exposed. Omit `api_key` for endpoints that do not require API-key authentication.
 
@@ -494,24 +401,24 @@ Application workloads receive environment variables through Kubernetes resources
 - Use **Kubernetes Secrets** for credentials and sensitive values such as database passwords, signing keys, OAuth/client secrets, channel tokens, webhook secrets and provider API keys. Reference only the required keys through `secretKeyRef` or a narrowly scoped `envFrom.secretRef`; mount files instead when a library expects certificate/key files or when file-based rotation is preferable.
 - Never commit plaintext Secret manifests, credentials, connection strings containing passwords, or private keys. Use Flux CD with SOPS-encrypted Secret manifests (or a separately selected external secret manager integration) so Git stores encrypted values and Flux decrypts them only during reconciliation. Keep decryption keys outside the Git repository and protect them independently.
 - Kubernetes Secret values are base64-encoded, not automatically encrypted at rest. Enable cluster secret encryption at rest where supported, restrict Secret read permissions with namespace-scoped RBAC, restrict Pod creation/exec privileges, and avoid broad service-account access. Do not log or expose secret values to the browser, agent/model context, task transcripts or diagnostics.
-- Use separate namespaces, ConfigMaps, Secrets, service accounts and credentials for each product deployment, even when they share a cluster. Crossplane provider credentials are held in appropriately scoped Kubernetes Secrets and referenced by the relevant ProviderConfig; they are not copied into application Pods unless the application itself needs them.
+- Use shared platform namespaces and service accounts with least privilege. Isolate tenants through scoped application authorization and per-connection credential references; per-tenant namespaces/deployments are optional stronger-isolation profiles. Crossplane provider credentials are held in appropriately scoped Kubernetes Secrets and referenced by the relevant ProviderConfig; they are not copied into application Pods unless the application itself needs them.
 - Prefer Kubernetes Service DNS names for in-cluster dependencies. `localhost` inside an application Pod refers to that same Pod, not PostgreSQL or another service. Use the CloudNativePG read/write Service name for database connections; use port-forwarding only for deliberate host-side development access.
 - Environment variables sourced from ConfigMaps or Secrets are fixed when a container starts. A change to their values requires a workload rollout/restart to update the process environment. Use mounted files or a dedicated reload mechanism when a workload must observe rotations without restart; do not assume env vars update live.
 
 ### 7.4 Security and operational requirements
 
-- Resolve product/account scope and sender identity from server-side channel and bot-account context. External sender IDs are scoped to their platform connection. Human identity associations are created and changed only through the relevant bot account's management conversation; do not infer a link from a matching name or username. No separate identity-verification step is required by this common linking flow.
-- The product's authorization layer decides what a participant and agent can read or change. Recheck authorization for inbound events, agent tool calls, callbacks, background work, attachment retrieval and proactive messages.
-- Do not expose channel tokens, webhook secrets, database credentials or storage credentials to the browser or model.
-- Keep each conversation's history and attachment access isolated. For multi-tenant products, enforce tenant scoping in repository queries and application services, not just in prompts.
-- Deduplicate webhook events and handle duplicates, retries and out-of-order delivery. Use external event/message identifiers where available and application idempotency keys for outbound effects.
-- Persist accepted messages and outbound intents before acknowledging durable receipt. Recover pending delivery after restarts without repeating product actions.
+- Resolve tenant scope, provider connection and sender identity from trusted server-side authentication and verified platform events. Never accept tenant identity from model output, browser input or an untrusted external identifier.
+- Enforce tenant isolation in every repository query, service operation, cache key, object-storage path, EVE session mapping, task, schedule, event cursor, attachment, search result and outbound dispatch. Use tenant-aware keys/constraints and deny access when tenant context is absent or ambiguous.
+- Recheck authorization for inbound events, agent tool calls, callbacks, background work, attachment retrieval, owner-initiated sends and workflow notifications. A valid platform credential is not by itself authorization to access another tenant's data.
+- Store each provider's credentials separately using encrypted secret storage or a secrets manager. Never expose tokens, webhook secrets, database credentials or storage credentials to the browser, model context, task transcripts or logs.
+- A provider may add or replace its platform identity without losing tenant-owned history/context. Reauthorize replacement identities and establish platform-side memberships/permissions again; do not assume platform conversation IDs or memberships transfer.
+- Deduplicate source events and handle retries/out-of-order delivery. Persist accepted messages and outbound intents before acknowledging durable receipt; recover pending delivery after restarts without repeating business effects.
 - Keep logs and diagnostics useful but redact credentials, private attachment content and unnecessary personal information.
-- Record platform-specific capability/configuration so the system can explain why a message, mention, attachment or proactive delivery cannot be processed on a given channel.
-- Verify that `CHATBOT_AI_CONFIG` is parsed as a JSON object with required `base_url` and optional `model` and `api_key` fields. A local/self-hosted endpoint must work with `model` and `api_key` omitted when it does not require them; an endpoint requiring an explicit model or API-key authentication receives those values through configuration, with the API key kept in a Kubernetes Secret and never exposed to model context, the browser or logs.
-- Verify that the scheduler rejects creation, activation or resumption when the deployment-wide active-schedule cap would be exceeded, including under concurrent requests.
-- Verify that recurring schedules and reminders below the configured minimum recurrence interval are rejected on creation, edit and resumption, while one-time schedules and event-/condition-triggered schedules remain governed by their applicable rules.
-- Keep the shared library and gateway maintainable and replaceable. Do not let a platform SDK's internal identifiers or EVE's runtime session model become the public product contract.
+- Record effective capabilities and connection status so unsupported or revoked operations fail explicitly rather than appearing successful.
+- Verify CHATBOT_AI_CONFIG parsing and keep any API key in a Kubernetes Secret, never in model context, browser state or logs.
+- Enforce both per-tenant scheduler quotas/fairness and the deployment-wide active-schedule safety cap atomically, including under concurrent requests.
+- Test cross-tenant isolation for conversations, history search, attachments, runtime sessions, tasks, schedules, event replay, credentials and outbound delivery.
+- Keep the shared library and gateway maintainable and replaceable. Do not let platform SDK identifiers or EVE runtime session IDs become the public tenant/conversation contract.
 
 ### 7.5 Common deployment and parity workflow
 
@@ -560,45 +467,42 @@ This is an illustrative shared-platform use case, not a built-in organization-ma
 
 ## 9. Common versus product-specific boundary
 
-The shared platform defines reusable technical contracts. Each product remains responsible for its own domain behavior and authorization:
+The shared platform defines reusable technical contracts. Each tenant remains responsible for its own domain behavior and authorization:
 
-- **Messaging and identity:** the shared layer normalizes channel identities, conversations, DMs, groups, threads, mentions and replies. Each product configures its own platform accounts, channel connections and access policies.
-- **Conversation history:** the shared layer owns canonical message persistence, context isolation and history retrieval. Each product defines the authorized conversation scope available to its agent.
-- **Proactive delivery:** the shared outbox handles durable delivery, retries and idempotency. Each product defines its own business triggers, consent requirements and message policy.
-- **Attachments:** the shared layer receives, persists/references and authorizes retrieval. Each product decides how its agent processes supported files.
-- **Bot accounts and provider groups:** the shared layer owns bot-account identity, platform connections and the association of authorized provider-side groups. Each product defines provider roles, group access policy and the business meaning of information shared from each group.
-- **Authorization:** the shared layer provides identity and policy interfaces; each product supplies its own principals, roles, tenant/owner scope and authorization decisions.
-- **Agent and client configuration:** the shared EVE integration and browser client are common. Agent instructions, tools, actions, approval semantics, views and branding remain product-owned.
-- **Scheduling and tasks:** the shared scheduler, task lifecycle and linked-interaction primitives are common. Each product supplies domain handlers, business records and rules for human-dependent work.
-- **Kubernetes access:** Kubernetes is deployment infrastructure, not a default agent capability. A product may expose narrowly scoped cluster operations only through its own authorized service boundary.
+- **Identity and integrations:** the shared layer manages tenant-scoped connection records, credential references, capabilities and mappings. Providers create and own their official platform identities and manage their platform-side memberships/permissions.
+- **Conversation history:** the shared layer owns canonical message persistence, context isolation and history retrieval in shared PostgreSQL. Each tenant defines the authorized conversation scope available to its agent.
+- **Outbound actions:** the shared outbox handles durable delivery, retries and idempotency. An authorized owner can explicitly initiate a send through a selected connected identity. Tenant workflows may send eligible service notifications under tenant-defined authorization; autonomous cold outreach is not a platform capability.
+- **Attachments:** the shared layer receives, persists/references and authorizes retrieval. Each tenant decides how its agent processes supported files.
+- **Authorization:** the shared layer provides identity and policy interfaces; each tenant supplies its principals, roles, tenant scope and authorization decisions.
+- **Agent and client configuration:** the shared EVE integration and browser client are common. Agent instructions, tools, actions, approval semantics, views and branding remain tenant-owned.
+- **Scheduling and tasks:** the shared scheduler, task lifecycle and linked-interaction primitives are common. Each tenant supplies domain handlers, business records and rules for human-dependent work.
+- **Infrastructure:** shared PostgreSQL and shared runtime infrastructure are the default. Dedicated databases, namespaces or deployments are optional isolation choices, not per-tenant defaults.
 
-The common library must not own product business records, business workflows, approval policies, domain-specific tools or product-specific deployment topology.
+The common library must not own tenant business records, business workflows, approval policies, domain-specific tools or tenant-specific deployment topology.
 
 ## 10. Shared acceptance checks
 
-The shared implementation is complete only when these checks pass independently in all product deployments:
+The shared implementation is complete only when these checks pass:
 
 - A user can start and continue a direct conversation using ordinary text without a slash command.
-- A bot account can connect to multiple authorized provider-side groups; questions and context can be shared with relevant groups, and the agent evaluates replies and enforces the originating customer's information scope.
-- A supported platform identity maps multiple DMs/groups/threads to distinct canonical conversations without cross-conversation context leakage.
-- A bot account can be provisioned and connected to a platform installation without confusing the bot account ID with a platform bot ID or a human user ID.
-- A provider can sign in to a bot account using its ID and authorize one or more groups as provider-side communication surfaces without creating a separate provider-DM workflow.
-- Switching a bot's platform identity or channel connection also leaves its internal bot account, context, history, tasks and data unchanged.
-- Provider contributions and corrections received in connected groups are stored with source and group scope; the agent can use them in later conversations only when the originating product's authorization and information scope permit.
-- When a customer asks a question outside the available context, the agent forwards it with necessary context to relevant connected provider groups, evaluates available replies, and returns an authorized answer to the originating conversation.
-- When no relevant provider-side group is connected, the agent does not invent a recipient or handoff; it clearly states that it cannot determine the answer from available context.
-- With `CHATBOT_REQUIRE_MENTION=true`, the bot ignores unaddressed group messages and responds to supported mentions/replies; with `false`, it can respond to ordinary group messages without an @mention, subject to platform delivery and permissions. Direct messages work without a mention in either mode.
-- A web conversation enters through `@chat-adapter/web` on the same unified Chat SDK gateway as messaging platforms, is authenticated by the server-side `getUser` resolver, and maps to an isolated canonical conversation/EVE session; it does not create or invite a messaging bot or use a separate chat-message API.
-- All product deployments use the same Vercel EVE runtime integration, unified Chat SDK gateway (including the Web adapter), shared web client, PostgreSQL/Drizzle persistence contracts and deployment/parity workflow; product-specific actions remain separately authorized.
-- A proactive text message can be queued and delivered without an active or immediately preceding user turn, provided the destination adapter supports it and the required consent/opt-in exists. For a browser conversation, persist the message and expose it on the next canonical-history synchronization; do not require or claim disconnected-browser push from Web adapter v1.
+- Each provider creates and owns its official platform identity; the application never provisions a separate internal bot account.
+- A provider authorizes the application to use its platform identity and adds that identity to selected destinations directly on the platform; there is no separate group-onboarding dashboard.
+- Multiple provider tenants can use the shared EVE runtime pool and shared PostgreSQL database without cross-tenant access to conversations, history, credentials, context, attachments, tasks, schedules or outbound actions.
+- A tenant can authorize multiple provider-owned platform identities; each connection has distinct credentials, permissions and capability metadata.
+- Replacing or adding a provider-owned identity preserves tenant-owned context, history, tasks and data. Replacement requires fresh authorization and platform-side membership/permissions; external memberships and conversation identifiers are not assumed to transfer.
+- External sender IDs are scoped to their provider connection and are never treated as globally unique human identities.
+- A supported platform identity maps multiple DMs/groups/threads to distinct canonical conversations without cross-conversation or cross-tenant context leakage.
+- When a customer asks a question outside the available context, the agent uses only authorized context and does not invent a recipient or handoff.
+- With CHATBOT_REQUIRE_MENTION=true, the bot ignores unaddressed group messages and responds to supported mentions/replies; with false, it can respond to ordinary group messages without an @mention, subject to platform permissions. Direct messages work without a mention in either mode.
+- A web conversation enters through the authenticated web adapter on the same unified gateway, maps to an isolated canonical conversation/EVE session and cannot supply its own tenant identity.
+- All tenants use the same shared EVE runtime integration, unified gateway, web client and tenant-scoped PostgreSQL/Drizzle persistence contracts.
+- An authorized owner can explicitly initiate a text message through a selected connected provider identity without an active inbound turn, provided the destination is eligible and platform rules/consent requirements are met. The platform does not autonomously select recipients or perform cold outreach.
 - One-time, recurring, interval and event-triggered schedules produce durable runs in the configured timezone and remain due/recoverable while the agent or client is offline.
 - Accepted asynchronous tasks survive client disconnect and process restart; cancellation is recorded and stale workers are fenced from committing.
 - Replayed or duplicate source events resume from a durable cursor and do not repeat an accepted business effect.
-- Provider-group replies are evaluated against source, relevance and customer scope before being returned; group discussions do not merge unrelated customer conversations or expose private transcripts.
-- With `CHATBOT_ATTACHMENTS_ENABLED=true`, a file attached through a supported messaging adapter or transferred through the authenticated browser upload mechanism is linked to the correct canonical message/conversation and made available to the authorized agent. Browser file transfer is not provided by Chat SDK Web v1 itself; unsupported file processing is not assumed.
-- With `CHATBOT_ATTACHMENTS_ENABLED=false`, attachment bytes are not fetched, uploaded, proxied, stored or passed to the agent; the text portion of the message still works, and attachment-related storage and AI processing are avoided.
 - A transient delivery failure or duplicate event does not lose a message or repeat its associated business action.
-- `search_conversation_history` finds an exact older message from before context compaction and returns its source reference and timestamp.
-- The history tool cannot retrieve messages from an unrelated conversation or product scope.
+- search_conversation_history finds an exact older message from before context compaction and returns its source reference and timestamp.
+- The history tool cannot retrieve messages from an unrelated conversation or tenant scope.
 - A restart does not erase canonical messages, enabled attachment metadata/references or pending outbound delivery.
 - A platform-specific unsupported capability is rejected or reported explicitly, not silently treated as successful.
+
