@@ -192,7 +192,7 @@ The shared web client submits chat turns through the Chat SDK Web adapter and re
 
 The common project owns the standalone shared web application and its reusable chat experience. Products configure its identity, roles, authorization and product actions. All clients that submit chat turns use the same gateway and adapter contract; a product or third party may build a separate client against the documented client and conversation contracts without creating a second chat-message ingress or streaming path.
 
-### 3.3 Proactive outbound text — independent of an incoming user turn
+### 3.3 Owner-initiated outbound text — independent of an incoming user turn
 
 An authorized owner **must be able to explicitly initiate a text message through a selected connected provider identity without an active inbound turn**. This is an owner-directed outbound capability, not permission for autonomous prospecting or cold outreach.
 
@@ -258,7 +258,7 @@ The shared client does not implement product-specific approval policies, compute
 
 ## 5. Durable scheduling, asynchronous tasks and linked interactions
 
-The common platform provides reusable mechanisms for durable schedules, asynchronous work and linked interactions. Each product persists these records in its own authoritative database and registers authorized handlers. The common layer determines when work is due, tracks its lifecycle and routes related events; it does not implement tenant-domain behavior.
+The common platform provides reusable mechanisms for durable schedules, asynchronous work and linked interactions. It persists tenant-owned records in shared PostgreSQL and invokes only handlers registered and authorized for that tenant. The common layer determines when work is due, tracks its lifecycle and routes related events; it does not implement tenant-domain behavior.
 
 ### 5.1 Shared scheduler
 
@@ -269,11 +269,11 @@ Support:
 - Explicit timezone handling, daylight-saving transitions, next-run calculation, missed-run policy, overlap rules, bounded retries and duplicate prevention.
 - Editing, pausing, resuming and deactivating a schedule while retaining its execution history.
 - Enforce the deployment-wide active-schedule limit and minimum recurring interval configured through the environment variables in §7.3. These limits are shared scheduler policy, not product-specific agent instructions.
-- Count each active schedule definition once, including one-time schedules, recurring schedules and reminders, across all tenants in that product deployment. Paused, deactivated, cancelled and completed one-time schedules do not count. Schedule runs/tasks are not additional schedules.
+- Count active schedule definitions across the shared deployment while enforcing per-tenant quotas and fair scheduling. Paused, deactivated, cancelled and completed one-time schedules do not count. Schedule runs/tasks are not additional schedules.
 - Check the active-schedule limit atomically when creating, activating or resuming a schedule so concurrent requests cannot exceed the configured limit. Reject a request that would exceed the limit with a clear explanation; do not silently discard or replace another schedule.
 - Apply the minimum interval to time-based recurring schedules, including recurring reminders, when they are created, edited or resumed. Validate the recurrence cadence, not the lead time of a one-time reminder. Event- or condition-triggered schedules have no fixed recurrence interval and are governed by the active-schedule limit instead.
 
-Persist schedule definitions and each schedule run. A due schedule creates a durable task/run for a tenant-registered handler; do not rely on an in-memory timer, an active agent session or a connected client as the source of truth. Recheck authorization and relevant business state when the handler executes. The scheduler owns timing, recurrence and deployment-wide schedule limits; the product handler owns the actual action and its domain rules.
+Persist schedule definitions and each schedule run. A due schedule creates a durable task/run for a tenant-registered handler; do not rely on an in-memory timer, an active agent session or a connected client as the source of truth. Recheck authorization and relevant business state when the handler executes. The scheduler owns timing, recurrence and deployment-wide schedule limits; the tenant handler owns the actual action and its domain rules.
 
 ### 5.2 Shared asynchronous task lifecycle
 
@@ -303,7 +303,7 @@ Expose authorized common agent-facing operations to open a pending interaction, 
 
 ### 5.5 Persistence and API requirements
 
-The common interfaces must support creating, reading, updating, pausing/deactivating and listing schedules; querying schedule runs; creating, inspecting, cancelling and resuming eligible tasks; recording checkpoints and worker leases; recording/replaying event cursors; and opening, listing/inspecting, assigning/routing, responding to, clarifying, resuming, resolving, closing and cancelling interactions. Link interaction records to their originating conversations/messages/participants and dependent task IDs. Persist schedule definitions/runs, task/run state, event cursors/deduplication keys, interaction/request records, approved context-projection references, participant/responder references, lifecycle state and event/delivery references in the host product's database. These are functional data/API requirements, not a fixed schema or exhaustive endpoint list.
+The common interfaces must support creating, reading, updating, pausing/deactivating and listing schedules; querying schedule runs; creating, inspecting, cancelling and resuming eligible tasks; recording checkpoints and worker leases; recording/replaying event cursors; and opening, listing/inspecting, assigning/routing, responding to, clarifying, resuming, resolving, closing and cancelling interactions. Link interaction records to their originating conversations/messages/participants and dependent task IDs. Persist schedule definitions/runs, task/run state, event cursors/deduplication keys, interaction/request records, approved context-projection references, participant/responder references, lifecycle state and event/delivery references in shared PostgreSQL with tenant ownership keys. These are functional data/API requirements, not a fixed schema or exhaustive endpoint list.
 
 
 ## 6. Search the complete persisted conversation history
@@ -321,7 +321,7 @@ The tool must:
 - Be used when a user refers to an older statement, decision, instruction, preference or detail that is not clearly present in the active context. The agent should search before asking the user to repeat something that may already be in the stored conversation.
 - Return the exact stored text for each selected result, or allow the agent to retrieve the full message by its returned message ID when an excerpt is truncated.
 - Support bounded result counts and pagination or subsequent retrieval so a large conversation does not produce an oversized tool response.
-- Be available to all product deployments' agent instances running on the shared Vercel EVE runtime.
+- Be available to all tenant-scoped agent sessions running on the shared Vercel EVE runtime.
 
 A compaction summary is an optimization for model context, not a replacement for the original messages. Do not delete or overwrite the source history merely because a summary has been created. The search tool must still find a phrase or fact from before compaction.
 
@@ -335,7 +335,7 @@ The SaaS runs a shared application, EVE runtime pool, gateway and PostgreSQL per
 
 | Area | Common technical baseline | Product-specific boundary |
 |---|---|---|
-| **Agent runtime** | **Vercel EVE**, integrated through the shared TypeScript platform. All product deployments use the same runtime integration and lifecycle model. | Agent identity/instructions, tools, capability access, policies and workflows are product-specific. |
+| **Agent runtime** | **Vercel EVE**, integrated through the shared TypeScript platform. All provider tenants use the same shared runtime integration and lifecycle model. | Agent identity/instructions, tools, capability access, policies and workflows are product-specific. |
 | **Application language** | TypeScript for the common library, EVE integration, gateway and application services. | Product domain services extend the same typed contracts. |
 | **Web client** | Preferred frontend options are **Cloudflare Vinext** and **Vite+**; **Next.js** is also supported. Use TypeScript and the Chat SDK Web adapter client integration (React, Vue or Svelte as appropriate). Browser chat turns and response streaming use the same Chat SDK gateway as messaging platforms; canonical history and non-chat resources remain in product-owned services. | Roles, branding, page configuration and product actions. |
 | **Persistence** | PostgreSQL with Drizzle ORM, managed inside Kubernetes by the CloudNativePG operator in every environment. Use shared PostgreSQL by default with tenant-scoped records, strict row/service authorization and least-privilege service credentials. Dedicated databases or clusters are optional stronger-isolation profiles. Use persistent volumes from each cluster's configured StorageClass. Configure independent base/WAL backups and tested recovery; a PVC alone is not a backup. | Tenant records remain logically isolated in shared PostgreSQL. Dedicated databases/clusters may be selected for contractual or regulatory isolation; the same PostgreSQL operator/configuration model is used locally and in production. |
@@ -376,7 +376,7 @@ Tenant business data remains owned by the tenant's application or domain service
 
 ### 7.3 Environment configuration and secrets
 
-All application-level and runtime configuration is supplied through environment variables only. This includes channel and integration settings, model/provider settings, feature flags, runtime options, limits, voice settings, attachment-ingestion controls, group mention behavior and shared scheduler limits. Do not use database rows, conversational commands or a separate settings UI as an alternative source for application/runtime configuration. Each deployment must receive its configured values through its environment; do not bake deployment-specific values into container images or source code. This rule does not turn tenant identity mappings, provider connections, conversation history/context or business records into environment variables: these are durable application data stored in the shared tenant-scoped database.
+Deployment-wide application/runtime configuration is supplied through environment variables only. This includes integration defaults, model/provider settings, feature flags, runtime options, limits, voice settings, attachment-ingestion controls, mention behavior and shared scheduler limits. Tenant-specific settings and context are separate tenant-owned application data, persisted with tenant scoping and authorization. Do not use conversational commands or an unprotected settings UI as an alternative source for deployment configuration. The shared deployment receives global values through its environment; do not bake deployment-specific values into container images or source code. This rule does not turn tenant identity mappings, provider connections, conversation history/context or business records into environment variables: these are durable application data stored in the shared tenant-scoped database.
 
 The following named common settings must be explicitly configured for the shared deployment:
 
@@ -391,9 +391,9 @@ The following named common settings must be explicitly configured for the shared
 
 Set **CHATBOT_CONTEXT** as shared deployment defaults. Tenant-specific additions are stored as tenant-owned, access-controlled configuration and composed with the base context without replacing it. Load its value from the application process environment at startup and append its text to the system-role context already configured for the agent. Preserve the existing system prompt/instructions and their content; `CHATBOT_CONTEXT` adds deployment-specific instructions and must never replace or overwrite the existing system-role context. Include the added text with role `system`, alongside the product agent's configured instructions and before turn-specific conversation messages; it does not replace conversation history. Supply this non-secret value through a ConfigMap or equivalent deployment environment configuration. Do not put credentials or other secrets in it. Updating the value takes effect after a workload restart or rollout.
 
-Enable and configure the common scheduler and periodic-worker functionality through deployment environment variables (for example, ConfigMaps for non-sensitive controls). These are common platform features; each product supplies the scheduled handlers and work to execute. Keep feature controls and operational settings in deployment configuration, not in product agent instructions.
+Enable and configure common scheduler and periodic-worker functionality through deployment environment variables (for example, ConfigMaps for non-sensitive controls). These are common platform features; each tenant supplies its authorized handlers and work to execute. Keep feature controls and operational settings in deployment configuration, not in product agent instructions.
 
-The active-schedule cap is enforced atomically on schedule creation, activation and resumption. When the cap is reached, requests that would add another active schedule are rejected with a clear explanation; existing schedules are not silently removed. The minimum recurrence interval is checked when a time-based recurring schedule is created, changed or resumed. The recurrence minimum is a shared deployment setting. The active-schedule value is a deployment safety cap; enforce tenant quotas/fairness separately.
+The active-schedule cap is enforced atomically on schedule creation, activation and resumption. When the cap is reached, requests that would add another active schedule are rejected with a clear explanation; existing schedules are not silently removed. The minimum recurrence interval is checked when a time-based recurring schedule is created, changed or resumed. The recurrence minimum is a shared deployment setting. The active-schedule value is a deployment safety cap; enforce tenant quotas and fair scheduling separately.
 
 Application workloads receive environment variables through Kubernetes resources: use ConfigMaps for non-sensitive values and Secrets for sensitive values. The attachment, mention and scheduler-limit settings are non-sensitive and should be supplied through ConfigMaps. Supply `CHATBOT_AI_CONFIG` through a Kubernetes ConfigMap when its object does not contain an API key; when `api_key` is present, supply the entire JSON object through a Kubernetes Secret so the credential is not exposed. Omit `api_key` for endpoints that do not require API-key authentication.
 
