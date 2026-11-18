@@ -1,14 +1,14 @@
-# Chatbot — Shared Conversation Platform
+# Agent platform
 
 ## Architecture overview
 
-The default architecture is a **shared multi-tenant SaaS platform** with one web application offering separate role-scoped platform-administrator and tenant/provider dashboards. Each provider tenant can create and manage multiple logical bots. Each bot owns its configuration, optional system instructions, persistent context and conversation history, together with its platform connections, credentials and linked destinations. The provider creates and owns each official application/bot identity on the relevant platform; the SaaS does not create or own those external identities. The dashboard manages bot records and connection setup, and supports linking/unlinking channels, groups and destinations through platform APIs where available. Where a platform requires an administrator to complete an action on the platform itself, the dashboard guides that step and verifies the resulting connection. All bot and connection data remains tenant-scoped.
+The default architecture is a **shared multi-tenant platform** with one web application offering separate role-scoped platform-administrator and tenant/provider dashboards. Each provider tenant can create and manage multiple logical bots. Each bot owns its configuration, optional system instructions, persistent context and conversation history, together with its platform connections, credentials and linked destinations. The provider creates and owns each official application/bot identity on the relevant platform; the application does not create or own those external identities. The dashboard manages bot records and connection setup, and supports linking/unlinking channels, groups and destinations through platform APIs where available. Where a platform requires an administrator to complete an action on the platform itself, the dashboard guides that step and verifies the resulting connection. All bot and connection data remains tenant-scoped.
 
 **Exclusive deployment constraint:** Kubernetes is the only supported deployment platform for the complete application. Every deployment profile—including local development, CI, a self-managed VPS or local machine, and managed cloud—must deploy the complete application stack into a Kubernetes cluster. The frontend, backend, EVE runtime and runtime services, Chat SDK channel/gateway, workers, schedulers and application data services must run as workloads inside that deployment's target cluster. PostgreSQL must run inside the same cluster under CloudNativePG management. Do not support a split deployment with application components or the database hosted outside the target cluster.
 
 The shared chatbot application, provider dashboard, Vercel EVE runtime integration and PostgreSQL persistence serve many provider tenants. Each logical bot is a durable application-owned record within its provider tenant; its connections are replaceable transport resources. Tenant and bot scope are resolved from trusted authentication and verified connection metadata. Every read, write, session, tool, task, file and outbound action is scoped to the owning tenant and bot. A provider may edit credentials, replace a platform identity, or link/unlink destinations without losing that bot's application-owned context, instructions, configuration or history. A replacement identity must be authorized separately and its platform-side memberships/permissions established again; external memberships and conversation identifiers do not automatically transfer.
 
-Shared PostgreSQL and shared runtime infrastructure are the default. Dedicated databases/CloudNativePG clusters, namespaces or isolated application workloads may be used when stronger isolation is required; they do not change the shared SaaS default.
+Shared PostgreSQL and shared runtime infrastructure are the default. Dedicated databases/CloudNativePG clusters, namespaces or isolated application workloads may be used when stronger isolation is required; they do not change the shared platform default.
 
 ~~~mermaid
 flowchart TB
@@ -17,7 +17,7 @@ flowchart TB
     IdentityB["Bot B provider-owned application identity"]
     IdentityN["Additional bot connections"]
   end
-  subgraph SaaS["Shared multi-tenant chatbot SaaS"]
+  subgraph Platform["Shared multi-tenant chatbot platform"]
     Dashboard["Provider dashboard<br/>bot and connection management"]
     Auth["Tenant authentication and authorization"]
     Bots["Tenant-scoped logical bots<br/>bot configuration and optional system instructions"]
@@ -62,7 +62,7 @@ flowchart TB
 
 ## 1. Architecture: modular shared chatbot application
 
-Implement the chatbot as a **modular shared multi-tenant SaaS application** with stable internal interfaces, rather than a separate chatbot implementation for each product. The default deployment is one shared application, shared EVE runtime pool and shared PostgreSQL persistence layer. Optional dedicated deployments may be offered for providers requiring stronger contractual or regulatory isolation, but they are not the default.
+Implement the chatbot as a **modular shared multi-tenant application** with stable internal interfaces, rather than a separate chatbot implementation for each product. The default deployment is one shared application, shared EVE runtime pool and shared PostgreSQL persistence layer. Optional dedicated deployments may be offered for providers requiring stronger contractual or regulatory isolation, but they are not the default.
 
 Each provider tenant supplies its authorization policy, agent configuration, domain capabilities and data scope through explicit tenant-scoped extension points. Dedicated databases, namespaces or deployments remain available when a provider's isolation requirements justify the operational cost.
 
@@ -125,7 +125,7 @@ The gateway and runtime are shared, while logical bot records, provider identiti
 
 ### 2.1 Provider-owned platform identities
 
-A provider can create multiple logical bots in the SaaS dashboard. Each logical bot is an application-owned record with its own configuration, optional system instructions, persistent context, canonical conversation history and one or more platform connections. The logical bot is distinct from the external platform identity: the provider creates and owns the official application/bot identity directly on the relevant platform, then authorizes the SaaS to receive events and send messages through it using the platform's supported credential or authorization mechanisms. The SaaS does not create or own the provider's external platform identity.
+A provider can create multiple logical bots in the provider dashboard. Each logical bot is an application-owned record with its own configuration, optional system instructions, persistent context, canonical conversation history and one or more platform connections. The logical bot is distinct from the external platform identity: the provider creates and owns the official application/bot identity directly on the relevant platform, then authorizes the application to receive events and send messages through it using the platform's supported credential or authorization mechanisms. The application does not create or own the provider's external platform identity.
 
 From the dashboard, the provider selects an adapter made available by the chatbot application and can link or unlink its supported channels, groups, rooms, workspaces and other destinations to a selected logical bot. Where the platform exposes suitable APIs, the dashboard performs the operation; where platform policy requires an administrator to act directly on the platform, the dashboard provides the required instructions and confirms the resulting membership/permissions. The platform remains authoritative for membership, access and permissions. There is no internal bot-management conversation.
 
@@ -137,13 +137,13 @@ A platform identity is a transport identity connected to a logical bot, not the 
 
 ### 2.2 Provider connection lifecycle and authorization
 
-1. The provider creates a logical bot in the SaaS dashboard and configures its bot-level settings and optional system instructions.
-2. The provider selects an application-registered adapter, creates and owns the corresponding official application/bot identity on that platform, then authorizes the SaaS application through the platform's supported credential or authorization flow. The dashboard records the credential/authorization against the selected logical bot; it does not install the adapter package.
+1. The provider creates a logical bot in the provider dashboard and configures its bot-level settings and optional system instructions.
+2. The provider selects an application-registered adapter, creates and owns the corresponding official application/bot identity on that platform, then authorizes the chatbot application through the platform's supported credential or authorization flow. The dashboard records the credential/authorization against the selected logical bot; it does not install the adapter package.
 3. The provider links the desired channels, groups or destinations to that bot through the dashboard where supported; otherwise, the dashboard guides the provider through the platform-side action and verifies the resulting access.
 4. The application verifies authorization and destination access, records the bot-scoped connection and effective capabilities, and begins accepting verified events.
 5. The provider can edit/rotate credentials, unlink destinations, revoke authorization, replace an external identity or add another connection. Only the affected connection records change; the logical bot's instructions, configuration, context, conversation history and business data remain intact.
 
-There is no internal platform-owned messaging identity or management conversation. The SaaS does have its own logical bot records and provider dashboard; those records organize the bot's configuration and replaceable external platform connections. The platform identity remains the provider's messaging identity.
+There is no internal platform-owned messaging identity or management conversation. The application does have its own logical bot records and provider dashboard; those records organize the bot's configuration and replaceable external platform connections. The platform identity remains the provider's messaging identity.
 
 The application maps external sender identities to authenticated tenant principals only through trusted identity claims or an explicit tenant-controlled linking process. A display name or matching username is never sufficient proof. Changing a person's external platform identity updates only the relevant identity mapping after re-authentication; it does not change tenant ownership or reset application-owned context.
 
@@ -373,7 +373,7 @@ Implement this as indexed text search over the persisted database (PostgreSQL fu
 
 ## 7. Common technical and deployment foundation
 
-The SaaS runs a shared application, EVE runtime pool, gateway and PostgreSQL persistence layer for many provider tenants. Tenant isolation is enforced in application services and repositories. The only technology differences belong to product-specific capabilities that the agent operates or integrates with; they do not create separate chatbot, runtime or deployment foundations.
+The platform runs a shared application, EVE runtime pool, gateway and PostgreSQL persistence layer for many provider tenants. Tenant isolation is enforced in application services and repositories. The only technology differences belong to product-specific capabilities that the agent operates or integrates with; they do not create separate chatbot, runtime or deployment foundations.
 
 | Area | Common technical baseline | Product-specific boundary |
 |---|---|---|
@@ -548,13 +548,13 @@ Keep stable internal module/interface boundaries. Common components may later be
 The shared implementation is complete only when these checks pass:
 
 - A user can start and continue a direct conversation using ordinary text without a slash command.
-- Each provider can create and manage multiple logical bots in the SaaS dashboard; the application never provisions or owns the external platform identities.
+- Each provider can create and manage multiple logical bots in the provider dashboard; the application never provisions or owns the external platform identities.
 - One shared web application provides distinct platform-administrator (tenant management and capability grants) and tenant/provider (own bots and connections) dashboards; OAuth 2.0/OIDC sign-in and server-side role checks prevent tenant access to platform administration or another tenant's data.
 - Within the tenant dashboard, an authorized user can select a bot, edit its configuration and open its integrated Chat view with text, STT/TTS and isolated persistent conversations, without deploying another chat frontend; external custom clients remain optional.
 - Authorized voice-only messages from supported messaging adapters become one persisted user text prompt through backend STT; text-plus-audio messages process only the text and do not download/transcribe/store the audio. Disabled/unsupported voice input and failed or empty transcription are reported without agent dispatch or fabricated success.
 - The dashboard records microphone audio without frontend STT, uses backend transcription, submits the recognized text once through the existing Web adapter, and displays the canonically persisted transcript as the user message. Raw audio is not retained by default; client TTS remains available.
 - Each logical bot has independently managed configuration, optional system instructions, a bot-scoped secret vault, group-mention, attachment and public internet access settings, persistent context, conversation history and one or more provider-owned platform connections.
-- Platform administrators can grant/revoke a tenant's optional schedule-override, attachment and internet capabilities. Tenant users cannot alter grants; revocation is enforced on subsequent operations without cross-tenant effects.
+- Platform administrators can grant/revoke a tenant's optional schedule-override, attachment, voice-input and internet capabilities. Tenant users cannot alter grants; revocation is enforced on subsequent operations without cross-tenant effects.
 - Any bot can save a valid custom AI endpoint with an optional model and encrypted API key; it automatically overrides `CHATBOT_AI_CONFIG`. Bots without a custom configuration use the shared provider; removing an override restores it, and a failing custom endpoint does not silently fall back.
 - AI, EVE, tool and external API failures are shown or durably recorded as real errors, with no dummy success or silent provider/tool substitution; normal bounded retry/recovery and unrelated work continue.
 - Bot instructions determine whether to request owner confirmation through existing chat/interaction primitives; no platform-wide approval stage is required, while authorization and service rules remain enforced.
@@ -580,7 +580,7 @@ The shared implementation is complete only when these checks pass:
 - The chatbot application registers Discord and WhatsApp Business as its initial external messaging integrations and `@chat-adapter/web` as a core browser-chat integration; adapter contract tests can use a fake adapter while integration tests verify real adapter lifecycle and tenant/bot isolation.
 - **MVP test case 1, support bot (Discord + WhatsApp Business):** Configure a logical bot to answer questions from supplied context and route unresolved questions through existing authorized provider handoff.
 - **MVP test case 2, marketing/research bot (X):** Configure another logical bot to use scheduled EVE execution and the authorized official X API to find product-relevant posts and replies, respond with useful product-related information where X permits automated replies and required approvals are in place, and handle permitted follow-up interactions. This is an external API-based test, not a new chatbot messaging adapter or marketing-specific service.
-- The chatbot application can register another compatible official or third-party Chat SDK adapter without changing its common messaging interfaces. Dashboard users configure only application-registered adapters; entering an npm package name does not trigger installation or execution in the shared SaaS.
+- The chatbot application can register another compatible official or third-party Chat SDK adapter without changing its common messaging interfaces. Dashboard users configure only application-registered adapters; entering an npm package name does not trigger installation or execution in the shared platform.
 - User-facing interaction uses portable plain-text messages across all supported platforms. Do not depend on or emit platform-specific interactive buttons, menus, cards, modals, callback controls, slash-command UI, rich-link controls or other platform-specific response elements; users must be able to understand and complete supported interactions through ordinary text messages. Do not rely on clickable links or platform-specific rendering as an interaction mechanism; when a URL is genuinely necessary, include it as ordinary text and keep the interaction usable without link-specific UI.
 - The adapter/connection registry selects the correct tenant- and bot-scoped adapter configuration and credentials, including when multiple bots use the same platform; unsupported dynamic-credential configurations are rejected or handled by a verified custom Chat SDK adapter, never by a direct messaging bypass.
 - A web conversation enters through the authenticated Web adapter registered with EVE's `chatSdkChannel`, maps to an isolated canonical conversation/EVE session and cannot supply its own tenant identity.
