@@ -292,7 +292,7 @@ The shared client does not implement product-specific approval policies, compute
 
 ## 5. Durable scheduling, asynchronous tasks and linked interactions
 
-The common platform provides reusable mechanisms for durable schedules, asynchronous work and linked interactions. It persists tenant-owned records in shared PostgreSQL and invokes only handlers registered and authorized for that tenant. The common layer determines when work is due, tracks its lifecycle and routes related events; it does not implement tenant-domain behavior.
+The common platform provides reusable mechanisms for durable schedules, asynchronous work and linked interactions. It persists tenant-owned records in shared PostgreSQL and dispatches scheduled work to the owning logical bot's EVE agent or to handlers registered and authorized for that tenant. The common layer determines when work is due, tracks its lifecycle and routes related events; it does not implement tenant-domain behavior.
 
 ### 5.1 Shared scheduler
 
@@ -302,12 +302,13 @@ Support:
 - Event- or condition-triggered schedules and scheduled reports.
 - Explicit timezone handling, daylight-saving transitions, next-run calculation, missed-run policy, overlap rules, bounded retries and duplicate prevention.
 - Editing, pausing, resuming and deactivating a schedule while retaining its execution history.
+- A schedule may directly invoke its owning bot's EVE agent with a stored, authorized instruction/prompt, without an inbound chat message or a custom tenant handler. The run uses that bot's instructions, context, permissions and available capabilities through the existing EVE execution and durable task lifecycle.
 - Enforce the effective per-bot active-schedule limit and minimum recurring interval from §7.3, with tenant-wide overrides only where platform administrators permit them. Enforce the separate deployment aggregate safety cap.
 - Count active schedule definitions separately for each bot and across the deployment, with tenant-aware fair scheduling. Paused, deactivated, cancelled and completed one-time schedules do not count; runs/tasks are not additional schedule definitions.
 - Check both the effective per-bot limit and aggregate deployment cap atomically when creating, activating or resuming schedules. Reject requests exceeding either limit with a clear explanation; do not silently discard another schedule.
 - Apply the effective per-bot minimum interval to recurring schedules and reminders when created, edited or resumed. Validate recurrence cadence, not the lead time of one-time reminders. Event-/condition-triggered schedules have no fixed recurrence interval but count against active-schedule limits.
 
-Persist schedule definitions and each schedule run. A due schedule creates a durable task/run for a tenant-registered handler; do not rely on an in-memory timer, an active agent session or a connected client as the source of truth. Recheck authorization and relevant business state when the handler executes. The scheduler owns timing, recurrence, effective per-bot limits and the aggregate safety cap; the tenant handler owns the actual action and its domain rules.
+Persist schedule definitions and each schedule run. A due schedule creates a durable task/run for its configured bot-agent invocation or tenant-registered handler; do not rely on an in-memory timer, an active agent session or a connected client as the source of truth. Recheck authorization and relevant business state when the run executes. The scheduler owns timing, recurrence, effective per-bot limits and the aggregate safety cap; the bot agent or tenant handler performs the configured work under applicable authorization and domain rules.
 
 ### 5.2 Shared asynchronous task lifecycle
 
@@ -424,7 +425,7 @@ Deployment-wide application/runtime defaults are supplied through environment va
 
 **Per-bot interaction settings:** The dashboard provides a group-mention toggle (mentions required by default) and an attachment toggle (disabled by default). A bot can ingest attachments only when its tenant has attachment permission and the bot toggle is enabled.
 
-**Per-bot public internet access:** The dashboard toggle defaults to disabled and is effective only with the tenant's public-internet permission. Apply EVE sandbox `networkPolicy` as `deny-all` unless both permit access, and `allow-all` when both do. The trusted request executor applies the same rule to public API calls; these controls do not disable the application's own model or messaging connectivity.
+**Per-bot public internet access:** The dashboard toggle defaults to disabled and is effective only with the tenant's public-internet permission. Apply EVE sandbox `networkPolicy` as `deny-all` unless both permit access, and `allow-all` when both do. Apply the effective restriction to every chatbot-controlled public-network path, including EVE search/fetch/browser tools, sandbox code and trusted HTTP/API execution; withhold paths that cannot enforce it. EVE sandbox policy alone does not constrain separate tools or external services. The application's own model and messaging connectivity remain available.
 
 **Per-bot AI provider:** `CHATBOT_AI_CONFIG` is the shared fallback for every bot. A bot may configure an endpoint, optional model and encrypted API key only when `CHATBOT_AI_MODE=allow_bot_override` and its tenant has the custom-AI-provider permission. The application selects the effective provider for each bot's EVE execution server-side; credentials never enter agent/model context or code. Bots without an authorized override use the shared configuration.
 
@@ -546,7 +547,7 @@ The shared implementation is complete only when these checks pass:
 - The provider dashboard can add/edit/rotate/revoke credentials and link/unlink supported channels, groups and destinations. Platform-side actions that cannot be performed through an API are guided and verified rather than falsely represented as complete.
 - The dashboard can create, replace and delete encrypted bot-scoped secret entries from newline-separated `KEY=VALUE` input, with masked saved values and isolation between bots; agents see only variable names such as `${FRONTDESK_API_KEY}`, not the stored values.
 - Bot instructions can refer to documented external APIs; agents can use available code or network capabilities to make ordinary API requests without a prescribed programming language or per-service SDK. Credential-bearing API requests use bot-scoped variable references resolved by a trusted request executor for an authorized destination; tests confirm secrets never reach the model, agent code, process environment or execution results.
-- Per-bot public internet access is enforced through EVE sandbox `networkPolicy` and the trusted outbound executor only when its tenant permits it; disabling either control blocks that bot's public internet requests independently of instructions.
+- Per-bot public internet access is enforced across EVE sandbox execution, chatbot-controlled search/fetch/browser tools and trusted API execution only when its tenant permits it; disabled bots cannot bypass the restriction through another tool, and external services are not presumed to inherit EVE's policy.
 - Multiple provider tenants can use the shared EVE runtime pool and shared PostgreSQL database without cross-tenant access; multiple bots within one tenant cannot access one another's bot-scoped conversations, history, credentials, context, attachments, tasks, schedules or outbound actions.
 - A logical bot can have multiple provider-owned platform connections; each connection has distinct credentials, permissions, linked destinations and capability metadata.
 - Editing, rotating or replacing credentials or an external identity preserves the same bot's instructions, configuration, context, history, tasks and data. Replacement requires fresh authorization and platform-side membership/permissions; external memberships and conversation identifiers are not assumed to transfer.
@@ -573,7 +574,7 @@ The shared implementation is complete only when these checks pass:
 - PostgreSQL runs inside the same target Kubernetes cluster and is managed by CloudNativePG in every environment; external managed PostgreSQL and SQLite are not supported.
 - Docker Compose, standalone host/container services, serverless application components and split frontend/backend/database hosting are not supported deployment alternatives.
 - An authorized owner can explicitly initiate a text message through a selected connected provider identity without an active inbound turn, provided the destination is eligible and platform rules/consent requirements are met. The platform does not autonomously select recipients or perform cold outreach.
-- One-time, recurring, interval and event-triggered schedules produce durable runs in the configured timezone and remain due/recoverable while the agent or client is offline.
+- One-time, recurring, interval and event-triggered schedules produce durable runs in the configured timezone, including direct bot-agent invocation from stored prompts without a custom handler; runs remain due/recoverable while the agent or client is offline.
 - Schedule defaults apply per bot, authorized tenant overrides apply uniformly to its bots, and concurrent creation cannot exceed either an effective bot limit or the independent deployment aggregate cap.
 - Accepted asynchronous tasks survive client disconnect and process restart; cancellation is recorded and stale workers are fenced from committing.
 - Replayed or duplicate source events resume from a durable cursor and do not repeat an accepted business effect.
