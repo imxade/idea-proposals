@@ -62,11 +62,11 @@ flowchart TB
 
 ## 1. Architecture: modular shared chatbot application
 
-Implement the chatbot as a **modular shared multi-tenant SaaS application** with stable internal interfaces, rather than a mandatory separately packaged library or a separate chatbot implementation for each product. The default deployment is one shared application, shared EVE runtime pool and shared PostgreSQL persistence layer. Optional dedicated deployments may be offered for providers requiring stronger contractual or regulatory isolation, but they are not the default.
+Implement the chatbot as a **modular shared multi-tenant SaaS application** with stable internal interfaces, rather than a separate chatbot implementation for each product. The default deployment is one shared application, shared EVE runtime pool and shared PostgreSQL persistence layer. Optional dedicated deployments may be offered for providers requiring stronger contractual or regulatory isolation, but they are not the default.
 
 Each provider tenant supplies its authorization policy, agent configuration, domain capabilities and data scope through explicit tenant-scoped extension points. Dedicated databases, namespaces or deployments remain available when a provider's isolation requirements justify the operational cost.
 
-This document specifies the shared application and its contracts, not an implementation repository or package structure.
+This document specifies the shared application and its contracts, not an implementation repository layout.
 
 ### 1.1 Application component boundaries
 
@@ -136,7 +136,7 @@ A platform identity is a transport identity connected to a logical bot, not the 
 ### 2.2 Provider connection lifecycle and authorization
 
 1. The provider creates a logical bot in the SaaS dashboard and configures its bot-level settings and optional system instructions.
-2. The provider selects a product-registered adapter, creates and owns the corresponding official application/bot identity on that platform, then authorizes the SaaS application through the platform's supported credential or authorization flow. The dashboard records the credential/authorization against the selected logical bot; it does not install the adapter package.
+2. The provider selects an application-registered adapter, creates and owns the corresponding official application/bot identity on that platform, then authorizes the SaaS application through the platform's supported credential or authorization flow. The dashboard records the credential/authorization against the selected logical bot; it does not install the adapter package.
 3. The provider links the desired channels, groups or destinations to that bot through the dashboard where supported; otherwise, the dashboard guides the provider through the platform-side action and verifies the resulting access.
 4. The application verifies authorization and destination access, records the bot-scoped connection and effective capabilities, and begins accepting verified events.
 5. The provider can edit/rotate credentials, unlink destinations, revoke authorization, replace an external identity or add another connection. Only the affected connection records change; the logical bot's instructions, configuration, context, conversation history and business data remain intact.
