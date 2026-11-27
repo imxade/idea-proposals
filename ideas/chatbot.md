@@ -140,6 +140,8 @@ A platform identity is a transport identity connected to a logical bot, not the 
 
 ### 2.2 Provider connection lifecycle and authorization
 
+Platform registration is exclusively for tenants who create, configure and manage logical bots. Customers and provider/staff members who merely interact with bots through connected messaging platforms do not need separate application accounts.
+
 1. The provider creates a logical bot in the provider dashboard and configures its bot-level settings and optional system instructions.
 2. The provider selects an application-registered adapter, creates and owns the corresponding official application/bot identity on that platform, then authorizes the chatbot application through the platform's supported credential or authorization flow. The dashboard records the credential/authorization against the selected logical bot; it does not install the adapter package.
 3. The provider links the desired channels, groups or destinations to that bot through the dashboard where supported; otherwise, the dashboard guides the provider through the platform-side action and verifies the resulting access.
